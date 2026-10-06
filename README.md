@@ -8,13 +8,16 @@ Browser extension for **Bomberman (1990), TurboGrafx-16, USA**. The long-term go
 
 1. Serve `dist/`, for example `python3 -m http.server 8080 --directory dist`.
 2. Open `http://localhost:8080` and load your local `Bomberman (USA).pce`.
-3. Choose your color and select **1P - SOLO**, **2-5P - CAMPAIGN**, or **2-5P - BATTLE (A.I)**. Campaign uses local AI teammates; Battle uses native controller ports driven by AI. Choose 2–5 players before starting.
+3. Choose your color. The original title screen opens automatically. Use **Up/Down** to select **1P - SOLO**, **2-5P - CAMPAIGN**, or **2-5P - BATTLE (A.I)**, **Left/Right** to choose 2–5 players, and **Enter** to start. You can also click a menu row. Campaign uses local AI teammates; Battle uses native controller ports driven by AI.
 4. Campaign retains the original opening introduction (about 40 seconds). The selected color includes the rear-facing introduction pose.
 
-The custom menu hides the native C-Link and password choices. **2-5P - BATTLE (Online)** is visible but disabled until online rooms exist. **LOAD SAVE** resumes the latest browser save after loading the ROM. The original PASSWORD option was a stage/round code; the new save controls preserve the exact emulator and AI state instead.
+The five choices appear inside the original title screen using the ROM's loaded font, native red cursor and landscape. There is no web menu overlay. C-Link and password choices are hidden. **2-5P - BATTLE (Online)** is dimmed and displays an unavailable message until online rooms exist. **LOAD SAVE** restores the latest browser save paused after loading the ROM. The original PASSWORD option was a stage/round code; the new save controls preserve the exact emulator and AI state instead.
+
+**Main menu** holds your current game in memory while you browse choices. **Continue game** returns to it. Selecting a new game replaces that session; save/export first if you want to keep it after reloading the page.
 
 | Action | Control |
 | --- | --- |
+| Main menu choice / player count / start | Up/Down / Left/Right / Enter |
 | Move | Arrows / WASD |
 | Place bomb | Space |
 | Button II | X |
@@ -53,7 +56,7 @@ Admin privileges apply to the local browser session; this is not an online accou
 BOMBERMAN_TEST_ROM=/absolute/path/to/game.pce npm test
 ```
 
-Checks cover revision rejection, palette restoration and complete suit colors, rear-facing intro, original campaign controls, native item pickup/monster spawning, independent AI block clearing and enemy kills, native Battle actors/controllers/bombs, exposed-exit stage clear, and deterministic emulator/AI save replay. A mocked DOM integration test exercises ROM/menu/admin/save wiring; it is **not real browser QA**. Remaining browser checks include audio, layout, fullscreen, real gamepads, mobile and long sessions.
+Checks cover revision rejection, palette restoration and suit colors, rear-facing intro, native menu font/cursor pixels and navigation, original campaign controls, native item pickup/monster spawning, independent AI block clearing and enemy kills, native Battle actors/controllers/bombs, exposed-exit stage clear, and deterministic emulator/AI save replay. A mocked DOM integration test exercises keyboard menu/admin/save wiring, LOAD SAVE and returning from the menu to the current game; it is **not real browser QA**. Remaining browser checks include audio, layout, fullscreen, real gamepads, mobile and long sessions.
 
 Local research helpers:
 

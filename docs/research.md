@@ -62,7 +62,7 @@ This proves stage-one recoloring, not full-game coverage.
 
 ## Verification limits
 
-The emulator and controls were exercised headlessly in Node and through mocked DOM events. No real browser, audio output, fullscreen, gamepad or remote multiplayer QA was performed in this environment. The site currently has no online transport and no second campaign character.
+The emulator and controls were exercised headlessly in Node and through mocked DOM events. No real browser, audio output, fullscreen, physical gamepad or remote multiplayer QA was performed in this environment. The site currently has no online transport; additional campaign characters use the local extension described below.
 
 ## v0.2 extension findings
 
@@ -90,3 +90,9 @@ Campaign activity uses the recent bank-9 stage-frame hook independently of the f
 AI movement checks a five-pixel feet radius against pillars, breakable/hidden blocks and breaking blocks at each step, including stale destinations and interrupted turns. A native sprite comparison covers all four directions and four animation phases; the extension uses the same visible bitmap pixels as the native actor.
 
 The spawned vest pickup sets RAM `0x43a` bit 7 and timer `0x446/0x447` to 3600 frames. Native flame-damage tests verify protection after pickup and death without it. Native enemy collision still kills the protected player; this vest is bomb-blast protection, not full immunity. Inventory text now states the effect and collection requirement.
+
+## Native title menu
+
+The menu uses loaded background font tiles at `0x200 + ASCII` and the original SATB cursor pattern 918. Native title SATB entries 1–11 draw the old choices/prompt/devices; hiding these during composition preserves the remaining title artwork. Five rows replace them at screen Y 138, 154, 170, 186 and 202, with a player-count hint at Y 218. Temporary font tile-map substitutions are restored after each native background scanline. Only the font ink is composited over the unchanged landscape. No glyph or title bitmap is bundled.
+
+Extension menu input consumes Up/Down, Left/Right and Run before the original four-choice menu receives them. Solo/Campaign dispatch into native Solo; Battle (A.I) dispatches into native Battle setup for 2–5 controller ports. Online and missing-save choices stay on the menu with an explanatory message. Keyboard/gamepad navigation, all five labels' font pixels, fifth-row native cursor, unchanged CPU/RAM/VRAM/palette and native intro/Battle launches pass headless checks. A current game is captured in memory while browsing the main menu and restored by Continue game; explicit browser saves remain separate.
