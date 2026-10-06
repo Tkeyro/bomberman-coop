@@ -7,10 +7,11 @@ export async function verifyROM(bytes) {
   return hex;
 }
 export const COLORS = {original:[252,252,252],black:[56,56,64],blue:[0,108,252],green:[36,180,0],red:[252,0,0],violet:[198,72,252],orange:[252,144,0],yellow:[252,216,0]};
-const SUIT_SHADES={2:.55,3:1,4:.78,5:1,8:.86,9:.71,10:.57,11:.86,13:.57,14:1,15:1};
+// Theme the helmet and limbs; keep the original torso and pink extremities.
+const SUIT_SHADES={8:.86,9:.71,10:.57,11:.86,13:.57,14:1,15:1};
 export function colorizePlayer(rgb,index,color,fade=1) {
  if(color==='original'||!Object.hasOwn(SUIT_SHADES,index))return {...rgb};
- const base=color==='red'&&index===5?[0,180,36]:COLORS[color];
+ const base=COLORS[color];
  return Object.fromEntries(['r','g','b'].map((channel,i)=>[channel,Math.round(base[i]*SUIT_SHADES[index]*fade)]));
 }
 // Palette 12 belongs to Bomberman throughout the intro and campaign, including

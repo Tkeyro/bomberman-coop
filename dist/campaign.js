@@ -1,7 +1,7 @@
 import {COLORS} from './session.js';
 export const ITEM_CATALOG = [
  ['fire','Fire up',0],['bomb','Bomb up',1],['remote','Remote control',2],['speed','Roller shoes',3],
- ['bomb-pass','Bomb pass',4],['wall-pass','Wall pass',5],['invincible','Fireproof vest',6],['life','Extra life',7],['skull','Skull / curse',8],
+ ['bomb-pass','Bomb pass',4],['wall-pass','Wall pass',5],['fireproof','Fireproof vest',6],['life','Extra life',7],['skull','Skull / curse',8],
  ['bonus-9','PC Engine Shuttle',9],['bonus-10','CoreGrafx',10],['bonus-11','SuperGrafx',11],['bonus-12','Saxophone',12],['bonus-13','Dr. Mitsumori',13],['bonus-14','Lisa',14]
 ].map(([id,name,type])=>({id,name,type}));
 const ENEMY_BASES=[0xd98,0xdb8,0xdd8,0xdf8,0xe18,0xe38,0xe58,0xe78,0xe98,0xeb8,0xed8,0xef8,0xf18,0xf38,0xf58,0xf78];
@@ -10,10 +10,15 @@ const key=(x,y)=>`${x},${y}`;
 export const stageID=p=>`${p.RAM[0x84a]}:${p.RAM[0x84b]}`;
 export function isCampaign(p) {
  const s=p.VDC[0].SATB,pat=s[2];
- return (!p._campaignTracker||p._campaignTracker.frame-p._campaignTracker.last<=2)&&p.RAM[0x84a]<8&&(s[3]&15)===12&&pat>=640&&pat<704&&p.RAM[0x84b]<8&&p.RAM[0x44a+32+2]!==0;
+ const active=p._campaignTracker?p._campaignTracker.last>=0&&p._campaignTracker.frame-p._campaignTracker.last<=2:(s[3]&15)===12&&pat>=640&&pat<704;
+ return active&&p.RAM[0x84a]<8&&p.RAM[0x84b]<8&&p.RAM[0x44a+32+2]!==0;
 }
 export function tileKind(p,x,y){if(x<2||x>Math.min(31,(p.RAM[0x434]||15)-1)||y<1||y>Math.min(31,(p.RAM[0x435]||12)-1))return 1;return p.RAM[0x44a+y*32+x]&31;}
 export function walkable(p,x,y){return [7,8,10].includes(tileKind(p,x,y));}
+export function canOccupy(p,x,y){
+ for(const cx of [Math.floor((x-5)/16),Math.floor((x+5)/16)])for(const cy of [Math.floor((y-5)/16),Math.floor((y+5)/16)])if([1,2,3,4,5].includes(tileKind(p,cx,cy)))return false;
+ return true;
+}
 export function playerPosition(p){return {x:p.RAM[0x43d]|p.RAM[0x43e]<<8,y:p.RAM[0x43f]|p.RAM[0x440]<<8};}
 export function bombs(p) {
  const result=[];
@@ -102,8 +107,8 @@ export function installCampaignTracker(p) {
  return tracker;
 }
 const POSES=[
- [[[80,16,672,4236],[80,32,674,140]],[[80,16,680,4236],[80,32,678,140]],[[80,16,672,4236],[80,32,674,140]],[[80,7,688,4492]]],
- [[[80,0,652,2444],[96,16,656,2188]],[[80,16,664,6284],[80,1,654,2188]],[[80,0,652,2444],[96,16,656,2188]],[[80,17,666,6284],[80,1,654,2188]]],
+ [[[81,16,672,4236],[81,32,674,140]],[[81,16,680,4236],[81,32,678,140]],[[81,16,672,4236],[81,32,674,140]],[[81,7,688,4492]]],
+ [[[80,0,652,2444],[96,16,656,2188]],[[80,17,664,6284],[80,2,654,2188]],[[80,0,652,2444],[96,16,656,2188]],[[80,17,666,6284],[80,1,654,2188]]],
  [[[80,8,640,396],[96,16,658,140]],[[80,8,644,396],[96,16,660,140]],[[80,8,640,396],[96,16,658,140]],[[80,8,648,396],[96,16,662,140]]],
  [[[80,16,652,396],[96,16,656,140]],[[80,15,664,4236],[80,30,654,140]],[[80,16,652,396],[96,16,656,140]],[[80,15,666,4236],[80,31,654,140]]]
 ];
@@ -135,12 +140,15 @@ export function createCompanions(p,{colorize}={}) {
    if(bot.target){
     const dx=bot.target.x*16+8-bot.x,dy=bot.target.y*16+8-bot.y;
     if(!walkable(p,bot.target.x,bot.target.y)){bot.target=null;bot.route=[];continue;}
-    const move=Math.min(.75,Math.abs(dx||dy));if(dx){bot.x+=Math.sign(dx)*move;bot.direction=dx>0?1:3;}else if(dy){bot.y+=Math.sign(dy)*move;bot.direction=dy>0?2:0;}
+    const move=Math.min(.75,Math.abs(dx||dy)),nextX=bot.x+(dx?Math.sign(dx)*move:0),nextY=bot.y+(!dx&&dy?Math.sign(dy)*move:0);
+    if(!canOccupy(p,nextX,nextY)){bot.target=null;bot.route=[];bot.action='Blocked';continue;}
+    bot.x=nextX;bot.y=nextY;if(dx)bot.direction=dx>0?1:3;else if(dy)bot.direction=dy>0?2:0;
     bot.animation=(bot.animation+1)%32;
     if(Math.abs(dx)+Math.abs(dy)<=.75){bot.x=bot.target.x*16+8;bot.y=bot.target.y*16+8;bot.target=null;}
     continue;
    }
    const start={x:tx,y:ty};
+   if(walkable(p,tx,ty)&&(Math.abs(bot.x-(tx*16+8))>.01||Math.abs(bot.y-(ty*16+8))>.01)){bot.target={x:tx,y:ty};bot.route=[];continue;}
    if(danger.has(key(tx,ty))){
     if(!bot.route.length)bot.route=findPath(p,start,n=>!danger.has(key(n.x,n.y)),{danger,allowDanger:true,maxSteps:7})??[];
     bot.target=bot.route.shift()??null;bot.action='Escaping';continue;
@@ -184,7 +192,8 @@ export function createCompanions(p,{colorize}={}) {
    for(const [offsetY,offsetX,pattern,attribute] of pose){
     const width=((attribute&256)>>4)+16;
     let height=((attribute&0x3000)>>8)+16;height=height>32?64:height;
-    const y=Math.round(bot.y-cameraY)+offsetY,originX=Math.round(bot.x-cameraX)+offsetX-32;
+    // Pose offsets were recorded with the original eight-pixel camera origin.
+    const y=Math.round(bot.y-cameraY)+offsetY,originX=Math.round(bot.x-cameraX)+offsetX+8-32;
     if(line<y||line>=y+height)continue;
     let spy=line-y;if(attribute&0x8000)spy=height-1-spy;
     const index=((pattern&this.SPAddressMask[width][height])<<5)|((spy&48)<<3)|(spy&15);

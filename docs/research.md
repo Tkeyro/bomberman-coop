@@ -66,7 +66,7 @@ The emulator and controls were exercised headlessly in Node and through mocked D
 
 ## v0.2 extension findings
 
-Recoloring targets campaign sprite palette 12 across the intro and gameplay, including rear-facing pattern `0x318` (792). Suit shading indices are 2, 3, 4 (torso), 8, 9, 10, 15 (helmet), and 11, 13, 14 (arms/legs); index 5 is glove/boot ends. Faces/outline remain untouched. Red alone uses green ends. Numeric palette RAM remains unchanged; render-cache colors are themed.
+Recoloring targets campaign sprite palette 12 across the intro and gameplay, including rear-facing pattern `0x318` (792). Recolored shading indices are 8, 9, 10, 15 (helmet) and 11, 13, 14 (arms/legs). Torso indices 2, 3, 4 and pink glove/boot index 5 remain native, along with faces/outline. Original white bypasses all recoloring. Numeric palette RAM remains unchanged; render-cache colors are themed.
 
 The stage-frame hook is CPU PC `0x83b0`, ROM bank 9. Campaign world/area are RAM `0x84a/0x84b`; Battle world is 8. Stage dimensions are `0x434/0x435`, camera X/Y are zero-page `0x25..0x28`. The 32-column-stride tile grid begins at `0x44a`. Low tile bits: 1 pillar, 2 block, 3 hidden exit, 4 hidden item, 7 pickup, 8 exposed exit, 10 floor, 11/12 flames.
 
@@ -81,3 +81,12 @@ Native Battle supports 2–5 independent controller ports. Actor state at `0x3bd
 Local AI campaign actors have independent extension movement/life/planner state and draw using loaded native sprite patterns through the normal compositor. Original native routines process their spawned bombs and enemy kills. On a cleared stage, an AI reaching tile 8 requests the native exit through `0x437 = 1`. A fixture verifies this trigger; full campaign/boss completion and transition QA remain outstanding.
 
 Complete save snapshots capture mutable emulator state without live DOM/audio/ROM mapping objects. ROM SHA-256, pinned core and format version gate import; bounded decoding and validation precede mutation. Exact CPU/RAM/screen replay and separate AI-state replay pass. Saves are local/private user data and must not be committed to source.
+
+
+## Sprite/collision and vest corrections
+
+Campaign activity uses the recent bank-9 stage-frame hook independently of the first SATB sprite palette. Native vest effects change the primary sprite palette, so sprite-palette gating incorrectly hid all extension actors during those flashes. AI drawing now stays active throughout the native palette cycle. Recorded pose X offsets included the initial eight-pixel camera origin; normalizing that origin before subtracting the live camera aligns AI sprites with their world-coordinate collisions.
+
+AI movement checks a five-pixel feet radius against pillars, breakable/hidden blocks and breaking blocks at each step, including stale destinations and interrupted turns. A native sprite comparison covers all four directions and four animation phases; the extension uses the same visible bitmap pixels as the native actor.
+
+The spawned vest pickup sets RAM `0x43a` bit 7 and timer `0x446/0x447` to 3600 frames. Native flame-damage tests verify protection after pickup and death without it. Native enemy collision still kills the protected player; this vest is bomb-blast protection, not full immunity. Inventory text now states the effect and collection requirement.

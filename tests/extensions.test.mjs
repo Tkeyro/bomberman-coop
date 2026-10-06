@@ -7,17 +7,20 @@ import {captureState,restoreState} from '../dist/save-state.js';
 const rom=process.env.BOMBERMAN_TEST_ROM,bytes=()=>fs.readFileSync(rom);
 function campaign(p){for(const a of launchSequence('solo'))frames(p,a.frames,a.button?[[0,a.button]]:[]);frames(p,2520);}
 function advance(p,crew,n){for(let i=0;i<n;i++){crew.update();p.Run();}}
-test('all nonwhite variants recolor arms, legs and helmet; only red gets green ends',()=>{
- const rgb={r:252,g:252,b:252};
+test('colored helmets and limbs match while pink ends and the original white suit stay native',()=>{
+ const rgb={r:252,g:252,b:252},pink={r:252,g:72,b:252};
  for(const color of Object.keys(COLORS)){if(color==='original')continue;
   assert.deepEqual(colorizePlayer(rgb,14,color),colorizePlayer(rgb,15,color));assert.deepEqual(colorizePlayer(rgb,11,color),colorizePlayer(rgb,8,color));assert.deepEqual(colorizePlayer(rgb,13,color),colorizePlayer(rgb,10,color));
-  assert.deepEqual(colorizePlayer(rgb,5,color),color==='red'?{r:0,g:180,b:36}:colorizePlayer(rgb,15,color));assert.deepEqual(colorizePlayer(rgb,6,color),rgb);
+  assert.deepEqual(colorizePlayer(pink,5,color),pink);assert.deepEqual(colorizePlayer(rgb,6,color),rgb);
+  for(const index of [2,3,4])assert.deepEqual(colorizePlayer(rgb,index,color),rgb);
  }
+ for(let index=0;index<16;index++)assert.deepEqual(colorizePlayer(pink,index,'original'),pink);
 });
 test('intro rear pose 792 is recolored without altering game palette or RAM',{skip:!rom},()=>{
  const p=createMachine(bytes());const selector=installColorSelector(p);selector.select('orange');for(const a of launchSequence('solo'))frames(p,a.frames,a.button?[[0,a.button]]:[]);frames(p,720);
  assert.equal(p.VDC[0].SATB[2],792);const ram=[...p.RAM],palette=[...p.Palette];selector.refresh();assert.deepEqual(p.RAM,ram);assert.deepEqual(p.Palette,palette);
  assert.ok(p.PaletteData[0x1ce].r>p.PaletteData[0x1ce].g);assert.deepEqual(p.PaletteData[0x1ce],p.PaletteData[0x1cf]);
+ for(const color of Object.keys(COLORS)){selector.select(color);for(const index of [2,3,4,5]){const raw=p.Palette[0x1c0+index];assert.deepEqual(p.PaletteData[0x1c0+index],{r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36});}}
 });
 test('native items and living monster templates spawn, move and pick up',{skip:!rom},()=>{
  const p=createMachine(bytes()),crew=createCompanions(p,{colorize:colorizePlayer});assert.throws(()=>crew.add(3,1),/active campaign/);campaign(p);assert.equal(isCampaign(p),true);assert.equal(enemies(p).length,3);
@@ -48,4 +51,31 @@ test('original Battle boots 2–5 actors; AI independently moves and places nati
   assert.deepEqual(battlePosition(p,0),human);assert.ok(before.some((pos,i)=>JSON.stringify(pos)!==JSON.stringify(battlePosition(p,i+1))));assert.ok(ai.state.bombsPlaced>0);assert.equal(bombSeen,true);
   const data=structuredClone(ai.state);data.plans[1].route=[{x:-10,y:1}];assert.throws(()=>validateBattleState(data),/Invalid/);
  }
+});
+
+test('spawned AI remains solid while the native player blinks and cannot cross blocked feet tiles',{skip:!rom},()=>{
+ const p=createMachine(bytes()),crew=createCompanions(p,{colorize:colorizePlayer});campaign(p);const bot=crew.add(4,1);bot.color='original';
+ // Collect the original vest at the human's feet to exercise native blinking.
+ spawnItem(p,6,2,1);let hiddenHuman=0,solidBot=0;const draw=p.MakeSpriteLine;
+ p.MakeSpriteLine=function(n){draw.call(this,n);if(n!==0)return;const sp=this.VDC[0].SPLine;if(sp.some(dot=>dot.data&&dot.no<2&&dot.palette!==448)){if(sp.some(dot=>dot.data&&dot.no===64))hiddenHuman++;}if(sp.some(dot=>dot.data&&dot.no===64))solidBot++;};
+ frames(p,45);assert.ok(hiddenHuman>0,'AI must render during native player blinking');assert.ok(solidBot>100);assert.equal(isCampaign(p),true);assert.ok(p.ImageData.data.every((v,i)=>i%4!==3||v===255),'rendered sprites remain opaque');
+ // Reuse this actor with a stale diagonal destination across a solid block.
+ bot.x=56;bot.y=24;bot.target={x:4,y:2};bot.cooldown=1000;const solid=0x44a+32+4,goal=0x44a+64+4;p.RAM[solid]=(p.RAM[solid]&224)|2;p.RAM[goal]=(p.RAM[goal]&224)|10;
+ for(let n=0;n<20;n++){crew.update();p.Run();assert.ok(bot.x+5<64,'feet must stop before the block');assert.equal(tileKind(p,4,1),2);}
+});
+test('spawned vest activates on pickup, blocks flame damage and retains native enemy damage',{skip:!rom},()=>{
+ const p=createMachine(bytes());createCompanions(p,{colorize:colorizePlayer});campaign(p);const baseline=captureState(p);const slot=spawnItem(p,6,2,1);frames(p,4);
+ assert.equal(p.RAM[0xf9b+slot],0);assert.ok(p.RAM[0x43a]&128);assert.ok((p.RAM[0x446]|p.RAM[0x447]<<8)>3500);
+ const protectedState=captureState(p),tracker={...p._campaignTracker};
+ // Native damaging flame tile under the stationary primary character.
+ p.RAM[0x44a+32+2]=(p.RAM[0x44a+32+2]&224)|11;frames(p,2);assert.equal(p.RAM[0x43a]&7,0);
+ restoreState(p,baseline);Object.assign(p._campaignTracker,tracker);p.RAM[0x44a+32+2]=(p.RAM[0x44a+32+2]&224)|11;frames(p,2);assert.notEqual(p.RAM[0x43a]&7,0,'unprotected player takes flame damage');
+ restoreState(p,protectedState);Object.assign(p._campaignTracker,tracker);const enemy=enemies(p)[0];spawnEnemy(p,enemy.slot,2,1);frames(p,2);assert.notEqual(p.RAM[0x43a]&7,0,'original vest does not grant enemy immunity');
+});
+test('all AI animation poses match the native sprite pixels at their world positions',{skip:!rom},()=>{
+ const p=createMachine(bytes()),crew=createCompanions(p,{colorize:colorizePlayer});campaign(p);const bot=crew.add(4,1);bot.color='original';bot.target={x:5,y:1};
+ const cpu=p.CPURun,sprite=p.MakeSpriteLine;let direction=0,phase=0,collect=false,matched=0,different=0;
+ p.CPURun=function(){if(this.PC===0x8c53&&this.MPR[4]===9*8192){this.RAM[0x43b]=direction;this.RAM[0x43c]=phase;}return cpu.call(this);};
+ p.MakeSpriteLine=function(n){sprite.call(this,n);if(n!==0||!collect)return;const sp=this.VDC[0].SPLine;for(let x=0;x<48;x++){const native=sp[x],ai=sp[x+32];if(native.data&&native.no<2){if(ai.no===64&&native.data===ai.data)matched++;else different++;}}};
+ for(direction=0;direction<4;direction++)for(phase=0;phase<4;phase++){bot.direction=direction;bot.animation=phase*8;frames(p,2);matched=0;different=0;collect=true;frames(p,1);collect=false;assert.ok(matched>200);assert.equal(different,0,`direction ${direction}, phase ${phase}`);}
 });

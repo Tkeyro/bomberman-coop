@@ -26,7 +26,7 @@ Click the game screen to focus keyboard controls. Losing focus releases held key
 
 ## Colors
 
-White, black, blue, green, red, violet, orange and yellow. Colored helmets, arms and legs share the selected color and appropriate shading. **Only red has green gloves/boots.** Original white retains its native pink ends. Faces, outlines and the original numeric palette/ROM remain intact. Opening rear pose and stage 1 are integration-tested; later campaign stages and all boss scenes still need visual QA.
+White, black, blue, green, red, violet, orange and yellow. Colored helmets, arms and legs share the selected color and appropriate shading. Hands and feet retain their original pink color for every variant, including red. Original white keeps its complete native appearance. The torso, faces, outlines and original numeric palette/ROM remain intact. Opening rear pose and stage 1 are integration-tested; later campaign stages and all boss scenes still need visual QA.
 
 ## Save and continue
 
@@ -39,9 +39,9 @@ White, black, blue, green, red, violet, orange and yellow. Colored helmets, arms
 
 During an active campaign stage, press **F2**. Emulation pauses. Choose an empty tile on the grid, then spawn an item, bomb, monster or AI Bomberman. Close the dialog/F2 to resume. If already paused, closing keeps it paused.
 
-All 15 native item IDs are available: fire up, bomb up, remote control, roller shoes, bomb pass, wall pass, fireproof vest, extra life, skull and six bonus items. Monster buttons clone living, non-boss templates already loaded in the current stage. Unloaded species and bosses are not offered because they require additional graphics and initialization research. Item and enemy slots retain original engine limits.
+All 15 native item IDs are available: fire up, bomb up, remote control, roller shoes, bomb pass, wall pass, fireproof vest, extra life, skull and six bonus items. Monster buttons clone living, non-boss templates already loaded in the current stage. Unloaded species and bosses are not offered because they require additional graphics and initialization research. Item and enemy slots retain original engine limits. Pickups activate when collected, not merely when spawned. The fireproof vest grants about 60 seconds of bomb-blast protection; enemies still cause damage, matching the original game.
 
-Up to four local AI teammates receive a random color, including white. They seek breakable blocks and enemies, place original-engine bombs when an escape route exists, avoid known blast paths, take explosion/enemy damage, and seek a revealed exit once enemies are cleared. Teammates carry across stage transitions. Their planner is experimental and they can die. They share the campaign bomb pool and the primary player's fire range; AI pickup collection, individual power-ups, lives/revival and native enemy targeting of teammates are not implemented. Solo's native player rules remain authoritative.
+Up to four local AI teammates receive a random color, including white. They seek breakable blocks and enemies, place original-engine bombs when an escape route exists, avoid known blast paths, take explosion/enemy damage, and seek a revealed exit once enemies are cleared. Teammates carry across stage transitions. Their planner is experimental and they can die. Their feet collide with pillars and breakable blocks, and sprite placement uses the same camera alignment as the native player. Native player palette flashes do not hide teammates. They share the campaign bomb pool and the primary player's fire range; AI pickup collection, individual power-ups, lives/revival and native enemy targeting of teammates are not implemented. Solo's native player rules remain authoritative.
 
 Admin privileges apply to the local browser session; this is not an online account/role system. No network server or authentication service is present.
 
