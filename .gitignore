@@ -4,6 +4,7 @@ node_modules/
 *.bin
 *.rgba
 *.state
+*.bmsave
 lab-output/
 upload/
 research/native/output/

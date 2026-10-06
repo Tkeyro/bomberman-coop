@@ -11,11 +11,11 @@ test('rejects incompatible ROM size and revision', async () => {
 test('color conversion preserves palette RAM, address, unrelated colors and restore', () => {
   const p = createMachine(new Uint8Array(262144));
   p.VDC[0].SATB[2] = 640; p.VDC[0].SATB[3] = 12;
-  p.Palette[0x1ce] = 0x1ff; p.Palette[0x132] = 0x1ff;
+  p.Palette[0x1cf] = 0x1ff; p.Palette[0x1ce] = 0x1ff; p.Palette[0x132] = 0x1ff;
   p.VCEAddress = 0x132; p.ToPalettes();
   const other = {...p.PaletteData[0x132]}, palette = [...p.Palette];
   const selector = installColorSelector(p); selector.select('blue');
-  assert.deepEqual(p.PaletteData[0x1ce], {r:54,g:126,b:252});
+  assert.deepEqual(p.PaletteData[0x1ce], {r:0,g:108,b:252});
   assert.deepEqual(p.PaletteData[0x132], other);
   assert.deepEqual(p.Palette, palette); assert.equal(p.VCEAddress,0x132);
   selector.select('original'); assert.deepEqual(p.PaletteData[0x1ce], {r:252,g:252,b:252});

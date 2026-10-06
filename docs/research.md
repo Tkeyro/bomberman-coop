@@ -63,3 +63,21 @@ This proves stage-one recoloring, not full-game coverage.
 ## Verification limits
 
 The emulator and controls were exercised headlessly in Node and through mocked DOM events. No real browser, audio output, fullscreen, gamepad or remote multiplayer QA was performed in this environment. The site currently has no online transport and no second campaign character.
+
+## v0.2 extension findings
+
+Recoloring targets campaign sprite palette 12 across the intro and gameplay, including rear-facing pattern `0x318` (792). Suit shading indices are 2, 3, 4 (torso), 8, 9, 10, 15 (helmet), and 11, 13, 14 (arms/legs); index 5 is glove/boot ends. Faces/outline remain untouched. Red alone uses green ends. Numeric palette RAM remains unchanged; render-cache colors are themed.
+
+The stage-frame hook is CPU PC `0x83b0`, ROM bank 9. Campaign world/area are RAM `0x84a/0x84b`; Battle world is 8. Stage dimensions are `0x434/0x435`, camera X/Y are zero-page `0x25..0x28`. The 32-column-stride tile grid begins at `0x44a`. Low tile bits: 1 pillar, 2 block, 3 hidden exit, 4 hidden item, 7 pickup, 8 exposed exit, 10 floor, 11/12 flames.
+
+Original campaign bombs occupy the first ten slots of the 40-slot arrays starting at `0x84f` (flags), `0x877` (tile X), `0x89f` (tile Y), `0x8c7` (animation), `0x8ef` (fuse), and `0x917` (fire group). Verified spawning invokes native rendering, explosions, block destruction and enemy death. Only zero-valued inactive slots are reused.
+
+Item flags/types at `0xf9b`, X at `0xfb4`, Y at `0xfcd` have 25 slots. Native redraw queue arrays at `0xfe6`, `0x1066`, `0x10e6`, `0x1166` use read/write indices `0x76/0x77`. Fifteen item IDs were rendered; original fire-up pickup was verified. Bonus item labels derive from matching game icons/score handlers and are not claims of recovered source symbols.
+
+Living enemy flag is bit 7 at `0xd98`; type is `0xeb8`; positions are SoA words across `0xdb8/0xdd8` and `0xdf8/0xe18`. Native stage-1 Ballom is type 2. Some live actors have `0xf18 == 128`; that byte must not be treated as a death flag. Monster spawning clones loaded non-boss templates, resets transient fields and the all-enemies-cleared flag `0xd96`.
+
+Native Battle supports 2–5 independent controller ports. Actor state at `0x3bd+port` is 0 alive, 2 dying, 1 dead. Position arrays are `0x3cc/0x3d1` and `0x3d6/0x3db`; capacity/fire range are `0x3ea/0x3ef`. Configured/active/alive player counts are `0x4b/0x4a/0x4e`. Four final RUN presses after selecting player count complete setup; an extra RUN pauses an already active match.
+
+Local AI campaign actors have independent extension movement/life/planner state and draw using loaded native sprite patterns through the normal compositor. Original native routines process their spawned bombs and enemy kills. On a cleared stage, an AI reaching tile 8 requests the native exit through `0x437 = 1`. A fixture verifies this trigger; full campaign/boss completion and transition QA remain outstanding.
+
+Complete save snapshots capture mutable emulator state without live DOM/audio/ROM mapping objects. ROM SHA-256, pinned core and format version gate import; bounded decoding and validation precede mutation. Exact CPU/RAM/screen replay and separate AI-state replay pass. Saves are local/private user data and must not be committed to source.

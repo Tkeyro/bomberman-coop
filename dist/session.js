@@ -6,38 +6,37 @@ export async function verifyROM(bytes) {
   if (hex !== ROM_SHA256) throw new Error('This file does not match the verified Bomberman (USA) revision.');
   return hex;
 }
-export const COLORS = { original: [252,252,252], blue: [54,126,252], green: [72,216,108], red: [252,72,72], violet: [198,108,252] };
-const SUIT_INDICES = [8,9,10,11,13,14,15];
-// Verified campaign sprites use palette 12. Change the rendering cache only;
-// ROM and numeric VCE palette RAM are never modified.
+export const COLORS = {original:[252,252,252],black:[56,56,64],blue:[0,108,252],green:[36,180,0],red:[252,0,0],violet:[198,72,252],orange:[252,144,0],yellow:[252,216,0]};
+const SUIT_SHADES={2:.55,3:1,4:.78,5:1,8:.86,9:.71,10:.57,11:.86,13:.57,14:1,15:1};
+export function colorizePlayer(rgb,index,color,fade=1) {
+ if(color==='original'||!Object.hasOwn(SUIT_SHADES,index))return {...rgb};
+ const base=color==='red'&&index===5?[0,180,36]:COLORS[color];
+ return Object.fromEntries(['r','g','b'].map((channel,i)=>[channel,Math.round(base[i]*SUIT_SHADES[index]*fade)]));
+}
+// Palette 12 belongs to Bomberman throughout the intro and campaign, including
+// rear-facing pattern 792. Preparing it before visibility avoids a white flash.
 export function installColorSelector(pce) {
-  let selected = 'original';
-  const convert = pce.ToPalettes.bind(pce);
-  const active = () => {
-    const s = pce.VDC[0].SATB;
-    return (s[3] & 15) === 12 && s[2] >= 640 && s[2] < 704;
-  };
-  pce.ToPalettes = () => {
-    convert();
-    const address = pce.VCEAddress;
-    if (selected === 'original' || !active() || (address >> 4) !== 28 || !SUIT_INDICES.includes(address & 15)) return;
-    const color = pce.Palette[address];
-    const r = (color >> 3) & 7, g = (color >> 6) & 7, b = color & 7;
-    if (r !== g || r !== b) return;
-    const rgb = pce.PaletteData[address];
-    [rgb.r,rgb.g,rgb.b] = COLORS[selected].map(component => Math.round(component * r / 7));
-    const mono = rgb.r * .299 + rgb.g * .587 + rgb.b * .114;
-    Object.assign(pce.MonoPaletteData[address], {r:mono,g:mono,b:mono});
-  };
-  function refresh() {
-    const saved = pce.VCEAddress;
-    for (const index of SUIT_INDICES) { pce.VCEAddress = 0x1c0 + index; pce.ToPalettes(); }
-    pce.VCEAddress = saved;
-  }
-  return { select(color) {
-    if (!Object.hasOwn(COLORS,color)) throw new Error('Unknown Bomberman color.');
-    selected = color; refresh();
-  }, refresh, get selected() { return selected; } };
+ let selected='original',battleColors=[];
+ const convert=pce.ToPalettes.bind(pce);
+ function colorFor(address){
+  const palette=address>>4;
+  if(palette===28)return selected;
+  if(pce.RAM?.[0x84a]===8&&palette>=16&&palette<21)return battleColors[palette-16]??(palette===16?selected:null);
+  return null;
+ }
+ pce.ToPalettes=()=>{
+  convert();const address=pce.VCEAddress,color=colorFor(address);if(color===null)return;
+  const index=address&15;
+  const source=(address>>4)===28?0x1c0:0x100;
+  const raw=pce.Palette[source+index],rgb={r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36};
+  const white=pce.Palette[source+15],fade=Math.max((white>>3)&7,(white>>6)&7,white&7)/7;
+  const themed=colorizePlayer(rgb,index,color,fade);
+  Object.assign(pce.PaletteData[address],themed);
+  const mono=themed.r*.299+themed.g*.587+themed.b*.114;
+  Object.assign(pce.MonoPaletteData[address],{r:mono,g:mono,b:mono});
+ };
+ function refresh(){const saved=pce.VCEAddress;for(const base of [0x1c0,...(pce.RAM?.[0x84a]===8?[0x100,0x110,0x120,0x130,0x140]:[])])for(let i=0;i<16;i++){pce.VCEAddress=base+i;pce.ToPalettes();}pce.VCEAddress=saved;}
+ return {select(color){if(!Object.hasOwn(COLORS,color))throw new Error('Unknown Bomberman color.');selected=color;if(battleColors.length)battleColors[0]=color;refresh();},setBattleColors(values){if(values.some(c=>!Object.hasOwn(COLORS,c)))throw new Error('Unknown battle color.');battleColors=[...values];refresh();},refresh,get selected(){return selected;},get battleColors(){return [...battleColors];}};
 }
 export const KEY_BINDINGS = {
   ArrowUp:[0,'UP'], KeyW:[0,'UP'], ArrowDown:[0,'DOWN'], KeyS:[0,'DOWN'],
