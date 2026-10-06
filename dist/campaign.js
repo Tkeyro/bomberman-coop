@@ -112,21 +112,37 @@ const POSES=[
  [[[80,8,640,396],[96,16,658,140]],[[80,8,644,396],[96,16,660,140]],[[80,8,640,396],[96,16,658,140]],[[80,8,648,396],[96,16,662,140]]],
  [[[80,16,652,396],[96,16,656,140]],[[80,15,664,4236],[80,30,654,140]],[[80,16,652,396],[96,16,656,140]],[[80,15,666,4236],[80,31,654,140]]]
 ];
+// The original collapse/explosion sequence holds each pose for eight frames.
+export const DEATH_FRAMES=104;
+const DEATH_POSES=[
+ [[80,8,696,4492]],[[80,8,704,4492]],[[80,8,696,4492]],
+ [[80,8,704,4492]],[[80,8,696,4492]],[[80,8,704,4492]],
+ [[80,24,682,4236],[80,9,682,6284]],
+ [[80,24,712,4236],[80,9,712,6284]],
+ [[80,9,714,6284],[80,24,714,4236]],
+ [[80,9,720,6284],[80,24,720,4236]],
+ [[80,9,722,6284],[80,24,722,4236]],
+ [[80,9,728,6284],[80,24,728,4236]],
+ [[80,24,730,4236],[80,9,730,6284]]
+];
+const visibleBot=b=>b.alive||(Number.isInteger(b.deathFrame)&&b.deathFrame<DEATH_FRAMES);
 export function createCompanions(p,{colorize}={}) {
  installCampaignTracker(p);
  const state={bots:[],stage:null,nextID:1,steps:0,events:[],active:false};
  const paletteCache=new Map();
  const originalSpriteLine=p.MakeSpriteLine;
  function add(x,y) {
-  requireFloor(p,x,y);if(state.bots.filter(b=>b.alive).length>=4)throw new Error('Maximum four AI teammates.');
+  requireFloor(p,x,y);if(state.bots.filter(visibleBot).length>=4)throw new Error('Maximum four AI teammates on screen. Wait for a death animation to finish.');
   const variants=Object.keys(COLORS),color=variants[Math.floor(Math.random()*variants.length)];
-  const bot={id:state.nextID++,x:x*16+8,y:y*16+8,color,alive:true,target:null,route:[],cooldown:0,direction:2,animation:0,action:'Exploring',bombsPlaced:0};
-  state.stage=stageID(p);state.bots=state.bots.filter(b=>b.alive);state.bots.push(bot);return bot;
+  const bot={id:state.nextID++,x:x*16+8,y:y*16+8,color,alive:true,deathFrame:null,target:null,route:[],cooldown:0,direction:2,animation:0,action:'Exploring',bombsPlaced:0};
+  state.stage=stageID(p);state.bots=state.bots.filter(visibleBot);state.bots.push(bot);return bot;
  }
  function record(bot,text){state.events.push({frame:state.steps,bot:bot.id,text});if(state.events.length>40)state.events.shift();}
  function update() {
-  if(!isCampaign(p)||(p.RAM[0x43a]&7)||p.RAM[0x437]){state.active=false;return;}
-  const stage=stageID(p);if(state.stage!==null&&state.stage!==stage){const human=playerPosition(p),blocked=new Set([key(Math.floor(human.x/16),Math.floor(human.y/16))]);for(const b of state.bots){const cell=nearestFreeTile(p,{x:Math.floor(human.x/16),y:Math.floor(human.y/16)},blocked);b.x=cell.x*16+8;b.y=cell.y*16+8;b.target=null;b.route=[];blocked.add(key(cell.x,cell.y));}state.stage=stage;}
+  if(!isCampaign(p)){state.active=false;return;}
+  const stage=stageID(p);if(state.stage!==null&&state.stage!==stage){state.bots=state.bots.filter(b=>b.alive);const human=playerPosition(p),blocked=new Set([key(Math.floor(human.x/16),Math.floor(human.y/16))]);for(const b of state.bots){const cell=nearestFreeTile(p,{x:Math.floor(human.x/16),y:Math.floor(human.y/16)},blocked);b.x=cell.x*16+8;b.y=cell.y*16+8;b.target=null;b.route=[];blocked.add(key(cell.x,cell.y));}state.stage=stage;}
+  for(const b of state.bots)if(!b.alive&&Number.isInteger(b.deathFrame)&&b.deathFrame<DEATH_FRAMES)b.deathFrame++;
+  if((p.RAM[0x43a]&7)||p.RAM[0x437]){state.active=false;return;}
   state.active=true;
   state.steps++;
   const danger=dangerCells(p),foes=enemies(p),nowBombs=bombs(p);
@@ -134,7 +150,7 @@ export function createCompanions(p,{colorize}={}) {
    if(!bot.alive)continue;
    const tx=Math.floor(bot.x/16),ty=Math.floor(bot.y/16),kind=tileKind(p,tx,ty);
    if([6,11,12].includes(kind)||foes.some(e=>Math.abs(e.x-bot.x)<10&&Math.abs(e.y-bot.y)<10)){
-    bot.alive=false;bot.action='Defeated';record(bot,'Defeated by explosion or enemy');continue;
+    bot.alive=false;bot.deathFrame=0;bot.target=null;bot.route=[];bot.action='Defeated';record(bot,'Defeated by explosion or enemy');continue;
    }
    if(bot.cooldown>0)bot.cooldown--;
    if(bot.target){
@@ -178,17 +194,18 @@ export function createCompanions(p,{colorize}={}) {
   if(vdcno!==0||!isCampaign(this))return;
   const v=this.VDC[0],cameraX=this.RAM[0x25]|this.RAM[0x26]<<8,cameraY=this.RAM[0x27]|this.RAM[0x28]<<8,line=v.DrawBGYLine-(v.VDS+v.VSW)+64;
   const sourceKey=this.Palette.slice(0x1c0,0x1d0).join(',');
-  for(const bot of state.bots){if(!bot.alive)continue;
+  for(const bot of state.bots){if(!visibleBot(bot))continue;
    const palette=512+state.bots.indexOf(bot)*16;
    let cached=paletteCache.get(bot.color);
    if(!cached||cached.key!==sourceKey){cached={key:sourceKey,colors:[],mono:[]};for(let i=0;i<16;i++){
     const raw=this.Palette[0x1c0+i],rgb={r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36};
     const white=this.Palette[0x1cf],fade=Math.max((white>>3)&7,(white>>6)&7,white&7)/7;
-    const color=colorize?colorize(rgb,i,bot.color,fade):rgb;cached.colors[i]=color;
+    const face=this.Palette[0x1c7],skin={r:((face>>3)&7)*36,g:((face>>6)&7)*36,b:(face&7)*36};
+    const color=colorize?colorize(rgb,i,bot.color,fade,skin):rgb;cached.colors[i]=color;
     const m=color.r*.299+color.g*.587+color.b*.114;cached.mono[i]={r:m,g:m,b:m};
    }paletteCache.set(bot.color,cached);}
    for(let i=0;i<16;i++){this.PaletteData[palette+i]=cached.colors[i];this.MonoPaletteData[palette+i]=cached.mono[i];}
-   const pose=POSES[bot.direction][bot.target?Math.floor(bot.animation/8)%4:0];
+   const pose=bot.alive?POSES[bot.direction][bot.target?Math.floor(bot.animation/8)%4:0]:DEATH_POSES[Math.floor(bot.deathFrame/8)];
    for(const [offsetY,offsetX,pattern,attribute] of pose){
     const width=((attribute&256)>>4)+16;
     let height=((attribute&0x3000)>>8)+16;height=height>32?64:height;
@@ -198,7 +215,7 @@ export function createCompanions(p,{colorize}={}) {
     let spy=line-y;if(attribute&0x8000)spy=height-1-spy;
     const index=((pattern&this.SPAddressMask[width][height])<<5)|((spy&48)<<3)|(spy&15);
     for(let j=0;j<width;j++){
-     const x=originX+j;if(x<0||x>=v.ScreenWidth||v.SPLine[x].data)continue;
+     const x=originX+j;if(x<0||x>=v.ScreenWidth||(v.SPLine[x].data&&(bot.alive||v.SPLine[x].no<2||v.SPLine[x].no>=64)))continue;
      const flip=!!(attribute&0x0800),bit=flip?(j%16):15-(j%16),bank=(flip&&width===32?(j<16?64:0):(j<16?0:64));
      let pixel=0;for(let plane=0;plane<4;plane++)pixel|=((v.VRAM[(index|bank)+plane*16]>>bit)&1)<<plane;
      if(pixel)Object.assign(v.SPLine[x],{data:pixel,palette,priority:128,no:64});
@@ -206,7 +223,7 @@ export function createCompanions(p,{colorize}={}) {
    }
   }
  };
- return {state,add,update,restore(data){validateCompanionState(data);Object.assign(state,structuredClone(data));},reset(){state.bots=[];state.stage=null;state.steps=0;state.events=[];state.nextID=1;state.active=false;}};
+ return {state,add,update,restore(data){validateCompanionState(data);Object.assign(state,structuredClone(data));for(const b of state.bots)if(b.deathFrame===undefined)b.deathFrame=b.alive?null:DEATH_FRAMES;},reset(){state.bots=[];state.stage=null;state.steps=0;state.events=[];state.nextID=1;state.active=false;}};
 }
 export function validRoute(route){return Array.isArray(route)&&route.length<=1024&&route.every(validTile);}
 export function validTile(t){return t&&Number.isInteger(t.x)&&t.x>=2&&t.x<=31&&Number.isInteger(t.y)&&t.y>=1&&t.y<=31&&(t.button===undefined||NEIGHBORS.some(n=>n[2]===t.button));}
@@ -214,6 +231,7 @@ export function validateCompanionState(data){
  const integer=n=>Number.isSafeInteger(n)&&n>=0;
  if(!data||Object.keys(data).some(k=>!['bots','stage','nextID','steps','events','active'].includes(k))||!Array.isArray(data.bots)||data.bots.length>4||!integer(data.nextID)||!integer(data.steps)||typeof data.active!=='boolean'||(data.stage!==null&&!/^[0-7]:[0-7]$/.test(data.stage))||!Array.isArray(data.events)||data.events.length>40)throw new Error('Invalid teammate state in save.');
  for(const b of data.bots)if(!b||!Object.hasOwn(COLORS,b.color)||!integer(b.id)||!Number.isFinite(b.x)||!Number.isFinite(b.y)||b.x<32||b.x>520||b.y<16||b.y>520||typeof b.alive!=='boolean'||(b.target!==null&&!validTile(b.target))||!validRoute(b.route)||!integer(b.cooldown)||!integer(b.animation)||!integer(b.bombsPlaced)||!Number.isInteger(b.direction)||b.direction<0||b.direction>3||typeof b.action!=='string'||b.action.length>100)throw new Error('Invalid teammate state in save.');
+ for(const b of data.bots)if(b.deathFrame!==undefined&&(b.alive?b.deathFrame!==null:!integer(b.deathFrame)||b.deathFrame>DEATH_FRAMES))throw new Error('Invalid teammate death animation in save.');
  for(const e of data.events)if(!e||!integer(e.frame)||!integer(e.bot)||typeof e.text!=='string'||e.text.length>200)throw new Error('Invalid teammate event in save.');
  return data;
 }

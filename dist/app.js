@@ -32,12 +32,13 @@ function initialize(bytes){
  nativeMenu.close();
  machine.SetROM(Array.from(bytes));machine.WaveVolume=muted?0:.6;companions.reset();battleAI.configure(2,false);machine._campaignTracker.frame=0;machine._campaignTracker.last=-100;colors.setBattleColors([]);colors.select($('color-select').value);
  frame=0;boot=TITLE_SEQUENCE.map(a=>({...a}));initialBots=0;started=false;mode='solo';$('frame-count').textContent='0';$('start-btn').disabled=true;$('start-btn').textContent='Select';$('pause-btn').textContent='Resume';
+ nativeMenu.prepare(Number($('player-count-select').value)||2);nativeMenu.setSave(quickSave);
  for(const id of ['pause-btn','reset-btn','mute-btn','fullscreen-btn','color-select','dump-btn','trace-btn','save-btn','export-save-btn','save-input','open-menu-btn','admin-btn'])$(id).disabled=false;
  $('menu-status').textContent='Opening the original title screen…';
  $('debug-output').textContent='Verified USA ROM loaded. Research downloads stay on your computer.';setModeLabels();
 }
 async function launch(nextMode){
- if(!rom||busy)return;await pause();finishTrace();nativeMenu.close();returnSave=null;companions.reset();battleAI.configure(2,false);mode=nextMode;count=Number($('player-count-select').value)||2;
+ if(!rom||busy)return;await pause();finishTrace();nativeMenu.leave();returnSave=null;companions.reset();battleAI.configure(2,false);mode=nextMode;count=Number($('player-count-select').value)||2;
  initialBots=mode==='campaign'?count-1:0;battleAI.configure(count,mode==='battle-ai');
  if(mode==='battle-ai'){const variants=Object.keys(COLORS);colors.setBattleColors([colors.selected,...Array.from({length:count-1},()=>variants[Math.floor(Math.random()*variants.length)])]);}
  boot=launchSequence(mode,count).slice(3).map(action=>({...action}));started=true;$('start-btn').textContent='Resume';canvas.setAttribute('aria-label','Bomberman game screen. Arrows or WASD move, Space places bombs.');$('menu-status').textContent='';setModeLabels();message('Starting '+(mode==='battle-ai'?'Battle with AI opponents.':'the original campaign.'));await resume();

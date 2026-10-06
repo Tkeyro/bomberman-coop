@@ -11,6 +11,15 @@ test('native title font and five-row cursor replace old labels without changing 
  frames(p,1);frames(reference,1);assert.deepEqual(p.RAM,reference.RAM);assert.deepEqual(p.VDC[0].VRAM,reference.VDC[0].VRAM);assert.deepEqual(p.VDC[0].SATB,reference.VDC[0].SATB);assert.deepEqual(p.Palette,reference.Palette);
  const width=p.ImageData.data.length/4/262;
  for(let y=17;y<128;y++)assert.deepEqual(p.ImageData.data.slice(y*width*4,(y+1)*width*4),reference.ImageData.data.slice(y*width*4,(y+1)*width*4),'title artwork remains native');
+ let copyrightPixels=0;
+ for(let y=226;y<234;y++)for(let x=48;x<272;x++){
+  const at=(y*width+x)*4;
+  assert.deepEqual([...p.ImageData.data.slice(at,at+3)],[...reference.ImageData.data.slice(((y+8)*width+x)*4,((y+8)*width+x)*4+3)],'the vacated text band uses clean native water background');
+  if([0,1,2].every(c=>reference.ImageData.data[at+c]===252)){
+   copyrightPixels++;assert.ok([0,1,2].some(c=>p.ImageData.data[at+c]!==252),'old copyright ink is removed');
+   const moved=((y+8)*width+x)*4;assert.deepEqual([...p.ImageData.data.slice(moved,moved+3)],[252,252,252],'original copyright pixels move down eight pixels');
+  }
+ }assert.ok(copyrightPixels>300);
  // Decode the expected string's loaded ROM glyphs and verify actual white ink pixels.
  function checkLabel(text,y,white=true){
   for(let i=0;i<text.length;i++)for(let dy=0;dy<8;dy++)for(let dx=0;dx<8;dx++){
@@ -25,6 +34,13 @@ test('native title font and five-row cursor replace old labels without changing 
  assert.ok(redAt(202)>0,'fifth row has the original red cursor');assert.equal(redAt(138),0);
  menu.input('DOWN');menu.input('DOWN');menu.input('RIGHT');menu.input('RIGHT');menu.input('RIGHT');menu.input('RIGHT');assert.equal(menu.count,5);menu.input('RUN');assert.deepEqual(chosen,{mode:'campaign',count:5});
  menu.close();frames(p,1);frames(reference,2);assert.deepEqual(p.RAM,reference.RAM);assert.deepEqual(p.ImageData.data,reference.ImageData.data,'closing restores the original title rendering');
+});
+test('the replacement menu covers every startup title frame before controls unlock',{skip:!rom},()=>{
+ const p=createMachine(fs.readFileSync(rom)),menu=installNativeMenu(p);menu.prepare(4);let menuLines=0,oldInk=0;const sprite=p.MakeSpriteLine;
+ p.MakeSpriteLine=function(n){sprite.call(this,n);if(n===0&&this.VDC[0].SATB[2]===918){menuLines++;oldInk+=this.VDC[0].SPLine.filter(dot=>dot.data&&dot.no>=1&&dot.no<12).length;}};
+ title(p);assert.equal(menu.active,false);assert.equal(menu.count,4);assert.ok(menuLines>100);assert.equal(oldInk,0,'C-Link/password/prompt sprites never render during startup');
+ const width=p.ImageData.data.length/4/262;let bright=0;for(let y=138;y<146;y++)for(let x=64;x<140;x++){const at=(y*width+x)*4;if([0,1,2].every(c=>p.ImageData.data[at+c]===252))bright++;}assert.ok(bright>30,'new Solo choice is already visible');
+ menu.open(4);assert.equal(menu.active,true);menu.leave();frames(p,8,[[0,'RUN']]);assert.equal(menu.active,false);
 });
 test('native-menu selection launches the original Solo intro and 2/5-player Battle',{skip:!rom},()=>{
  for(const [mode,count]of [['solo',2],['battle-ai',2],['battle-ai',5]]){

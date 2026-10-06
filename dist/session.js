@@ -7,10 +7,13 @@ export async function verifyROM(bytes) {
   return hex;
 }
 export const COLORS = {original:[252,252,252],black:[56,56,64],blue:[0,108,252],green:[36,180,0],red:[252,0,0],violet:[198,72,252],orange:[252,144,0],yellow:[252,216,0]};
-// Theme the helmet and limbs; keep the original torso and pink extremities.
-const SUIT_SHADES={8:.86,9:.71,10:.57,11:.86,13:.57,14:1,15:1};
-export function colorizePlayer(rgb,index,color,fade=1) {
- if(color==='original'||!Object.hasOwn(SUIT_SHADES,index))return {...rgb};
+// Nonwhite variants have a themed helmet/body, skin-colored limbs and pink ends.
+const SUIT_SHADES={2:.71,3:1,4:.86,8:.86,9:.71,10:.57,15:1};
+const LIMB_SHADES={11:.86,13:.57,14:1};
+export function colorizePlayer(rgb,index,color,fade=1,skin={r:252*fade,g:144*fade,b:0}) {
+ if(color==='original')return {...rgb};
+ if(Object.hasOwn(LIMB_SHADES,index))return Object.fromEntries(['r','g','b'].map(channel=>[channel,Math.round(skin[channel]*LIMB_SHADES[index])]));
+ if(!Object.hasOwn(SUIT_SHADES,index))return {...rgb};
  const base=COLORS[color];
  return Object.fromEntries(['r','g','b'].map((channel,i)=>[channel,Math.round(base[i]*SUIT_SHADES[index]*fade)]));
 }
@@ -31,7 +34,8 @@ export function installColorSelector(pce) {
   const source=(address>>4)===28?0x1c0:0x100;
   const raw=pce.Palette[source+index],rgb={r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36};
   const white=pce.Palette[source+15],fade=Math.max((white>>3)&7,(white>>6)&7,white&7)/7;
-  const themed=colorizePlayer(rgb,index,color,fade);
+  const face=pce.Palette[source+7],skin={r:((face>>3)&7)*36,g:((face>>6)&7)*36,b:(face&7)*36};
+  const themed=colorizePlayer(rgb,index,color,fade,skin);
   Object.assign(pce.PaletteData[address],themed);
   const mono=themed.r*.299+themed.g*.587+themed.b*.114;
   Object.assign(pce.MonoPaletteData[address],{r:mono,g:mono,b:mono});
