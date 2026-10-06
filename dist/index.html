@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f4f1e8">
+  <meta name="description" content="A browser laboratory for the original TurboGrafx-16 Bomberman campaign and experimental cooperative play.">
+  <title>Bomberman · Co-op Lab</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="page-wrap">
+    <header class="site-header">
+      <a class="brand" href="./" aria-label="Bomberman Co-op Lab home"><span class="brand-mark" aria-hidden="true">B<span>+</span></span><span>BOMBERMAN<span class="brand-sub">CO-OP LAB</span></span></a>
+      <div class="header-meta"><span class="status-dot" aria-hidden="true"></span> CAMPAIGN RESEARCH <span class="version">V0.1</span></div>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <div><p class="eyebrow">TKEYRO / TURBOGRAFX-16</p><h1 id="page-title">The original game.<br>A new way to play together.</h1><p class="intro-copy">Start with the solo campaign. This lab is investigating how to bring a second Bomberman into the original stages.</p></div>
+        <div class="build-note"><span class="tiny-label">CURRENT BUILD</span><strong>Solo player + research tools</strong><span>Campaign co-op is not enabled yet.</span></div>
+      </section>
+
+      <div class="lab-layout">
+        <section class="game-card" aria-label="Game player">
+          <div class="card-heading"><div class="heading-label"><span class="small-square" aria-hidden="true"></span><h2>CAMPAIGN PLAYER</h2></div><span id="mode-label" class="mode-pill">SOLO</span></div>
+          <div class="game-viewport"><canvas id="game-canvas" width="684" height="262" tabindex="0" aria-label="Bomberman game screen. Load a local ROM to begin."></canvas></div>
+          <div class="game-toolbar">
+            <div class="toolbar-group"><button id="start-btn" class="button button-primary" disabled><span aria-hidden="true">▶</span> Start game</button><button id="pause-btn" class="button button-quiet" disabled>Pause</button><button id="reset-btn" class="button button-quiet" disabled>Reset</button></div>
+            <div class="toolbar-group"><button id="mute-btn" class="button button-quiet" disabled>Mute</button><button id="fullscreen-btn" class="button button-quiet" disabled>Fullscreen <span aria-hidden="true">↗</span></button></div>
+          </div>
+          <div class="player-footer"><p>Focus the screen, then Enter to start. The original intro lasts about 40 seconds.</p><div class="telemetry"><span>FRAMES <b id="frame-count">0</b></span><span>CAMPAIGN <b id="player-count">1P</b></span></div></div>
+        </section>
+
+        <aside class="setup-card" aria-labelledby="setup-title">
+          <div class="card-heading"><h2 id="setup-title">YOUR SESSION</h2><span class="step-marker">01</span></div>
+          <div class="setup-content">
+            <label class="file-drop" for="rom-input"><span class="file-symbol" aria-hidden="true">+</span><strong>Load your game file</strong><span>Choose a local .pce ROM</span><input id="rom-input" type="file" accept=".pce" aria-describedby="rom-help load-status"></label>
+            <p id="rom-help" class="field-note">Your ROM stays in this browser. No game file is included with this site.</p>
+            <p id="load-status" class="load-status" role="status" aria-live="polite">Waiting for a game file.</p>
+            <div class="field"><label for="color-select">Bomberman color <span class="experimental">EXPERIMENTAL</span></label><select id="color-select" disabled><option value="original">Original white</option><option value="blue">Blue</option><option value="green">Green</option><option value="red">Red</option><option value="violet">Violet</option></select><p id="color-notice" class="field-note">Color patch being verified.</p></div>
+            <div class="connection-status"><span class="neutral-dot" aria-hidden="true"></span><span id="online-status">Online rooms pending</span></div>
+          </div>
+        </aside>
+      </div>
+
+      <div class="details-layout">
+        <section class="controls-card" aria-labelledby="controls-title"><p class="eyebrow">KEYBOARD CONTROLS</p><h2 id="controls-title">A little muscle memory.</h2><div class="control-grid"><div class="control-item"><span class="keys"><kbd>↑</kbd><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd><span class="or">or</span><kbd>WASD</kbd></span><span>Move</span></div><div class="control-item"><span class="keys"><kbd>Space</kbd></span><span>Place bomb</span></div><div class="control-item"><span class="keys"><kbd>Enter</kbd></span><span>Run / start</span></div><div class="control-item"><span class="keys"><kbd>Shift</kbd></span><span>Select</span></div></div></section>
+        <section class="research-card" aria-labelledby="coop-title"><div class="research-heading"><p class="eyebrow">THE NEXT MILESTONE</p><span class="research-badge">IN RESEARCH</span></div><h2 id="coop-title">Two players. One campaign.</h2><p id="coop-status" role="status" aria-live="polite">Co-op is not enabled yet. We are investigating independent movement, bombs and stage completion for a second campaign player.</p><p class="native-note">Local Battle mode: player 2 uses IJKL to move, O for bombs, and 2 for Run. Gamepads use controller ports 1–5. Online play is not connected yet.</p></section>
+      </div>
+
+      <section class="debug-section" aria-label="Campaign research tools"><div class="debug-header"><div><span class="eyebrow">UNDER THE HOOD</span><p>Inspect emulator memory to investigate campaign behaviour.</p></div><button id="debug-toggle" class="button button-outline" aria-controls="debug-panel" aria-expanded="false">Research tools <span aria-hidden="true">+</span></button></div><div id="debug-panel" hidden><div class="debug-actions"><button id="dump-btn" class="button button-outline" disabled>Download RAM</button><button id="trace-btn" class="button button-outline" disabled>Capture 120-frame trace</button></div><pre id="debug-output" aria-live="polite">Load a game file to begin a research session.</pre></div></section>
+    </main>
+    <footer class="site-footer"><span>TKEYRO / BOMBERMAN CO-OP LAB</span><span>An independent experimental project.</span></footer>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

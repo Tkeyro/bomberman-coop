@@ -1,0 +1,10 @@
+node_modules/
+*.pce
+*.rom
+*.bin
+*.rgba
+*.state
+lab-output/
+upload/
+research/native/output/
+site-artifact.tar.gz
