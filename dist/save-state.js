@@ -34,7 +34,10 @@ export function validateState(pce,save) {
   if(s.RAM.some(v=>!Number.isInteger(v)||v<0||v>255)||s.Palette.some(v=>!Number.isInteger(v)||v<0||v>65535)) throw new Error('Invalid game memory in save.');
   if(![2,3,4].includes(s.VCEBaseClock)||![3,12].includes(s.CPUBaseClock)||s.TimerBaseClock!==3||s.PSGBaseClock!==6||s.TimerPrescaler<0||s.TimerPrescaler>=3072||s.PSGProgressClock<0||s.PSGProgressClock>=6||s.RAMMask!==8191||s.MPR.some(v=>!Number.isInteger(v)||v<0||v>0x1fe000||(v&8191)!==0)) throw new Error('Invalid hardware configuration in save.');
   if(!Number.isInteger(s.VDCPutLine)||s.VDCPutLine<0||s.VDCPutLine>=262||s.VDCPutLineProgressClock<0||s.VDCPutLineProgressClock>=1368) throw new Error('Invalid video timing in save.');
-  for(const v of s.VDC) if(v.VDCProgressClock<0||v.VDCProgressClock>=1368||v.DrawLineWidth<1||v.DrawLineWidth>684||v.ScreenWidth<1||v.ScreenWidth>684||v.ScreenSize<1||v.ScreenSize>684||v.VRAM.some(w=>!Number.isInteger(w)||w<0||w>65535)||v.SPLine.some(dot=>!Number.isInteger(dot.data)||dot.data<0||dot.data>15||(dot.palette!==undefined&&(!Number.isInteger(dot.palette)||dot.palette<0||dot.palette>575)))) throw new Error('Invalid video configuration in save.');
+  // Cross-stage enemies use isolated render palettes 640..3184. Hardware
+  // palette RAM stays at its native size; these bases are compositor-only.
+  const spritePalette=n=>Number.isInteger(n)&&n>=0&&(n<=575||n===624||(n>=640&&n<=3184&&(n&15)===0));
+  for(const v of s.VDC) if(v.VDCProgressClock<0||v.VDCProgressClock>=1368||v.DrawLineWidth<1||v.DrawLineWidth>684||v.ScreenWidth<1||v.ScreenWidth>684||v.ScreenSize<1||v.ScreenSize>684||v.VRAM.some(w=>!Number.isInteger(w)||w<0||w>65535)||v.SPLine.some(dot=>!Number.isInteger(dot.data)||dot.data<0||dot.data>15||(dot.palette!==undefined&&!spritePalette(dot.palette)))) throw new Error('Invalid video configuration in save.');
   const screen=save.screen;
   if(![320,428,640,684].includes(screen.width)||screen.height!==262||!Array.isArray(screen.pixels)||screen.pixels.length!==684*262*4||screen.pixels.some(v=>!Number.isInteger(v)||v<0||v>255)) throw new Error('Invalid saved screen.');
   if(save.session.color!==undefined&&!Object.hasOwn(COLORS,save.session.color)) throw new Error('Invalid color in save.');

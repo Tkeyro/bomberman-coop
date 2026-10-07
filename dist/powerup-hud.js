@@ -49,32 +49,56 @@ export function createPowerupHUD(p,{getHuman=()=>playerPosition(p)}={}){
   return set.call(this,address,value);
  };
  function pages(){
-  const result=[];let row=[],width=0;
+  const result=[];let page=[],row=0,width=0;
   for(let type=0;type<15;type++)if(state.counts[type]){
-   const count=String(state.counts[type]),cell=Math.max(16,count.length*8)+6;
-   if(row.length&&width+cell>88){result.push(row);row=[];width=0;}
-   row.push({type,count,x:160+width,width:cell-6});width+=cell;
+   const count=String(state.counts[type]),cell=12+count.length*4;
+   if(width+cell>136){width=0;if(++row===2){result.push(page);page=[];row=0;}}
+   page.push({type,count,x:112+width,y:10+row*11});width+=cell;
   }
-  if(row.length)result.push(row);return result;
+  if(page.length)result.push(page);return result;
  }
  p.MakeBGLine=function(n){
   bg.call(this,n);if(n!==0||!active())return;
   const v=this.VDC[0],y=v.DrawBGYLine-(v.VDS+v.VSW);
-  if(y<8||y>=32)return;
-  const left=((v.HDS+v.HSW)<<3)+v.DrawBGIndex;
-  // Restrict composition to the old HI label/number. Score, clock, lives,
-  // borders outside this rectangle and every arena pixel remain native.
-  for(let x=160;x<248;x++)v.BGLine[left+x]=0x100;
-  const choices=pages(),row=choices[Math.floor(state.tick/PAGE_FRAMES)%choices.length]??[];
-  for(const entry of row){
-   if(y<24){
-    const origin=entry.x+Math.floor((entry.width-16)/2);
-    for(let x=0;x<16;x++)v.BGLine[left+origin+x]=iconIndex(v,entry.type,x,y-8);
-   }else{
-    const origin=entry.x+Math.floor((entry.width-entry.count.length*8)/2);
-    for(let letter=0;letter<entry.count.length;letter++)for(let x=0;x<8;x++)if(pixel(v,0x200+entry.count.charCodeAt(letter),x,y-24))v.BGLine[left+origin+letter*8+x]=0xb2;
-   }
+  if(y<9||y>=31)return;
+  const left=((v.HDS+v.HSW)<<3)+v.DrawBGIndex,original=v.BGLine.slice();
+  function nativeLine(sourceY){
+   const line=v.DrawBGLine,screenY=v.DrawBGYLine,destination=v.BGLine.slice();
+   try{v.DrawBGLine=sourceY;v.DrawBGYLine=sourceY+v.VDS+v.VSW;bg.call(this,n);return v.BGLine.slice();}
+   finally{v.DrawBGLine=line;v.DrawBGYLine=screenY;for(let x=0;x<destination.length;x++)v.BGLine[x]=destination[x];}
   }
+  // Keep SC and all four outer border edges. Rearrange only the header's
+  // interior, leaving every arena pixel and loaded pattern unchanged.
+  for(let x=16;x<248;x++)v.BGLine[left+x]=0x100;
+  // Copy the inherited compositor's head, including the isolated selected-
+  // color palette, rather than reconstructing its colors or modifying VRAM.
+  for(let x=0;x<24;x++)v.BGLine[left+80+x]=original[left+136+x];
+  const base=2*v.VScreenWidth+((v.VDCRegister[7]>>3)&(v.VScreenWidth-1));
+  const numberTile=ref=>(ref&4095)>=0x291&&(ref&4095)<=0x29a;
+  const score=v.VRAM.slice(base+2,base+11).filter(numberTile);if(!score.length)score.push(0xb291);
+  if(y>=10&&y<18){
+   const width=Math.min(8,Math.floor(56/score.length));
+   for(let letter=0;letter<score.length;letter++)for(let x=0;x<width;x++)v.BGLine[left+20+letter*width+x]=((score[letter]&0xf000)>>8)|pixel(v,score[letter]&4095,Math.floor(x*8/width),y-10);
+  }
+  function digits(value,x,top,width=4){
+   if(y<top||y>=top+8)return;
+   for(let letter=0;letter<value.length;letter++)for(let dx=0;dx<width;dx++)if(pixel(v,0x291+Number(value[letter]),Math.floor(dx*8/width),y-top)===2)v.BGLine[left+x+letter*width+dx]=0xb2;
+  }
+  if(y>=18&&y<30){
+   const clock=nativeLine.call(this,8+(y-18)*2);
+   for(let x=0;x<8;x++)v.BGLine[left+20+x]=clock[left+88+x*2];
+  }
+  if(y>=21&&y<29){
+   const time=nativeLine.call(this,16+y-21);
+   for(let x=0;x<32;x++)v.BGLine[left+32+x]=time[left+104+x];
+  }
+  const choices=pages(),page=choices[Math.floor(state.tick/PAGE_FRAMES)%choices.length]??[];
+  for(const entry of page)if(y>=entry.y&&y<entry.y+8){
+   // Only HUD samples shrink. Full-size world items and badge art retain the
+   // exact native 16x16 pixels exported by powerupIcon.
+   for(let x=0;x<8;x++)v.BGLine[left+entry.x+x]=iconIndex(v,entry.type,x*2,(y-entry.y)*2);
+   digits(entry.count,entry.x+9,entry.y,4);
+   }
  };
  return {
   state,

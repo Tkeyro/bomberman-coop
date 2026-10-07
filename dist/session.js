@@ -54,7 +54,10 @@ export function installColorSelector(pce) {
   Object.assign(pce.MonoPaletteData[address],{r:mono,g:mono,b:mono});
  };
  function refresh(){const saved=pce.VCEAddress;for(const base of [0x1c0,...(pce.RAM?.[0x84a]===8?[0x100,0x110,0x120,0x130,0x140]:[])])for(let i=0;i<16;i++){pce.VCEAddress=base+i;pce.ToPalettes();}pce.VCEAddress=saved;
-  const white=pce.Palette[0xb2],fade=Math.max((white>>3)&7,(white>>6)&7,white&7)/7,shades={2:1,6:6/7,7:4/7};
+  // The six native lives glyphs use 6/7 for helmet shading and 15 for its
+  // white highlights/side strips. Index 2 is the HUD's other white; 8/9 are
+  // the face, while 3 belongs to the surrounding frame and stays native.
+  const white=pce.Palette[0xb2],fade=Math.max((white>>3)&7,(white>>6)&7,white&7)/7,shades={2:1,6:6/7,7:4/7,15:1};
   for(let i=0;i<16;i++){const raw=pce.Palette[0xb0+i],rgb={r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36},shade=shades[i];const themed=selected!=='original'&&shade!==undefined?Object.fromEntries(['r','g','b'].map((c,j)=>[c,Math.round(COLORS[selected][j]*shade*fade)])):rgb;pce.PaletteData[headPalette+i]=themed;const m=themed.r*.299+themed.g*.587+themed.b*.114;pce.MonoPaletteData[headPalette+i]={r:m,g:m,b:m};}
  }
  return {select(color){if(!Object.hasOwn(COLORS,color))throw new Error('Unknown Bomberman color.');selected=color;if(battleColors.length)battleColors[0]=color;refresh();},setBattleColors(values){if(values.some(c=>!Object.hasOwn(COLORS,c)))throw new Error('Unknown battle color.');battleColors=[...values];refresh();},refresh,get selected(){return selected;},get battleColors(){return [...battleColors];}};

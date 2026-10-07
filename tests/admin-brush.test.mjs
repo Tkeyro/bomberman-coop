@@ -19,7 +19,7 @@ test('admin selection is a persistent placement tool with toggle, deselect and s
   await import('../dist/app.js');const bytes=fs.readFileSync(process.env.BOMBERMAN_TEST_ROM);
   await elements.get('rom-input').listeners.change({target:{files:[{size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)}]}});
   const tick=()=>{clock+=50;nextFrame(clock);},key=async code=>{window.listeners.keydown({code,preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));};
-  for(let n=0;n<110;n++)tick();assert.match(elements.get('menu-status').textContent,/1P - SOLO/);await key('Enter');await key('Space');window.listeners.keyup({code:'Space',preventDefault(){}});
+  for(let n=0;n<110;n++)tick();assert.match(elements.get('menu-status').textContent,/1P - CAMPAIGN/);await key('Enter');assert.match(elements.get('menu-status').textContent,/1-0/);await key('Enter');await key('Space');window.listeners.keyup({code:'Space',preventDefault(){}});
   for(let n=0;n<400&&!/Game ready/.test(elements.get('load-status').textContent);n++)tick();assert.match(elements.get('load-status').textContent,/Game ready/);assert.equal(machine._newCampaign.enabled,false);
   await key('F2');assert.equal(elements.get('admin-dialog').open,true);assert.equal(elements.get('pause-btn').textContent,'Resume');
   const frameBefore=elements.get('frame-count').textContent;tick();assert.equal(elements.get('frame-count').textContent,frameBefore,'placement pauses emulation');

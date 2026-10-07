@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { verifyROM, installColorSelector, traceWrites, ROM_SHA256 } from '../dist/session.js';
+import { verifyROM, installColorSelector, traceWrites, ROM_SHA256, COLORS } from '../dist/session.js';
 import { createMachine, frames } from '../scripts/headless.mjs';
 import {captureState,restoreState} from '../dist/save-state.js';
 
@@ -43,10 +43,28 @@ test('lives icon follows every selected helmet color while its face, HUD text an
  frames(p,180);frames(p,8,[[0,'RUN']]);frames(p,120);frames(p,8,[[0,'RUN']]);frames(p,2520);
  const baseline=captureState(p),ram=[...p.RAM],vram=[...p.VDC[0].VRAM],palette=[...p.Palette];
  selector.select('original');frames(p,1);const original=Uint8ClampedArray.from(p.ImageData.data);
+ // Decode the actual native glyphs: the remaining white helmet strips use
+ // index 15, not index 2. The HUD frame and orange face use other entries.
+ const used=new Map();for(const tile of [0x268,0x269,0x278,0x279,0x288,0x289])for(let y=0;y<8;y++)for(let x=0;x<8;x++){
+  const a=tile*16+y,bit=7-x,lo=p.VDC[0].VRAM[a],hi=p.VDC[0].VRAM[a+8];
+  const index=(lo>>bit&1)|((lo>>(bit+8)&1)<<1)|((hi>>bit&1)<<2)|((hi>>(bit+8)&1)<<3);used.set(index,(used.get(index)??0)+1);
+ }
+ assert.equal(used.get(15),12,'native helmet has twelve white highlight/side pixels');assert.equal(used.get(6),24);assert.equal(used.get(7),2);
+ const helmetPixels=[];for(let y=18;y<42;y++)for(let x=168;x<184;x++){
+  const offset=(y*684+x)*4;if(original[offset]===252&&original[offset+1]===252&&original[offset+2]===252)helmetPixels.push(offset);
+ }
+ assert.equal(helmetPixels.length,12,'all native white highlights must appear in the rendered lives icon');
  for(const color of ['black','blue','green','red','violet','orange','yellow','original']){
   restoreState(p,baseline);selector.select(color);assert.deepEqual(p.RAM,ram);assert.deepEqual(p.VDC[0].VRAM,vram);assert.deepEqual(p.Palette,palette);frames(p,1);
   let changed=0;for(let y=0;y<42;y++)for(let x=0;x<320;x++){const i=(y*684+x)*4;if([0,1,2].some(c=>p.ImageData.data[i+c]!==original[i+c])){assert.ok(x>=168&&x<184&&y>=18&&y<42,`HUD change outside head: ${x},${y}`);changed++;}}
-  assert.ok(color==='original'?changed===0:changed>20);for(const index of [8,9]){const raw=p.Palette[0xb0+index];assert.deepEqual(p.PaletteData[576+index],{r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36});}
+  assert.ok(color==='original'?changed===0:changed>20);for(const index of [1,3,8,9]){const raw=p.Palette[0xb0+index];assert.deepEqual(p.PaletteData[576+index],{r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36});}
+  if(color!=='original'){
+   for(const [index,shade] of [[6,6/7],[7,4/7],[15,1]])assert.deepEqual(p.PaletteData[576+index],Object.fromEntries(['r','g','b'].map((channel,i)=>[channel,Math.round(COLORS[color][i]*shade)])));
+   for(const offset of helmetPixels)assert.deepEqual([...p.ImageData.data.slice(offset,offset+3)],COLORS[color],`all native white helmet highlights follow ${color}`);
+  }
+  if(color==='black')for(let y=23;y<36;y++)for(let x=171;x<182;x++){
+   const offset=(y*684+x)*4;assert.notDeepEqual([...p.ImageData.data.slice(offset,offset+3)],[252,252,252],'black helmet retains no white highlights');
+  }
  }
 });
 test('original campaign boots, second port is inactive, suit tint affects only player pixels', {skip:!file}, async () => {

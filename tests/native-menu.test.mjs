@@ -1,14 +1,22 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {createMachine,frames} from '../scripts/headless.mjs';
-import {installNativeMenu,TITLE_SEQUENCE} from '../dist/native-menu.js';
+import {installNativeMenu,TITLE_SEQUENCE,MENU_OPTIONS} from '../dist/native-menu.js';
 import {launchSequence,activeBattle} from '../dist/battle-ai.js';
 const rom=process.env.BOMBERMAN_TEST_ROM;
 function title(p){for(const a of TITLE_SEQUENCE)frames(p,a.frames,a.button?[[0,a.button]]:[]);}
-test('native title font and six-row cursor replace old labels without changing game memory',{skip:!rom},()=>{
+test('DLC defaults to one player and retains explicitly selected counts and spectators',()=>{
+ const p={MakeBGLine(){},MakeSpriteLine(){},CheckGamePad(){}},menu=installNativeMenu(p);
+ menu.open(5);menu.input('DOWN');assert.equal(menu.count,1);menu.input('RIGHT');menu.input('RIGHT');assert.equal(menu.count,3);menu.input('UP');menu.input('DOWN');assert.equal(menu.count,3);
+ menu.open(2);menu.setCount(5);menu.input('DOWN');assert.equal(menu.count,5,'an explicit player selection takes priority over the default');
+ menu.open(-3);menu.input('DOWN');assert.equal(menu.count,-3,'watch selection remains available');
+});
+test('native five-row menu, world picker and AI/ONLINE pages preserve native game memory',{skip:!rom},()=>{
  const bytes=fs.readFileSync(rom),p=createMachine(bytes),reference=createMachine(bytes);let chosen;
- const menu=installNativeMenu(p,{onSelect:(mode,count)=>chosen={mode,count}});title(p);title(reference);menu.open(2);
+ const menu=installNativeMenu(p,{onSelect:(mode,options)=>chosen={mode,options}});title(p);title(reference);menu.open(2);
+ assert.deepEqual(MENU_OPTIONS.map(({label})=>label),['1P - CAMPAIGN','1P - DLC','2-5P - CAMPAIGN','2-5P - BATTLE','LOAD SAVE']);
+ const render=()=>{frames(p,1);frames(reference,1);};
  // Observe final pixels and compare native CPU state with an unmodified title.
- frames(p,1);frames(reference,1);assert.deepEqual(p.RAM,reference.RAM);assert.deepEqual(p.VDC[0].VRAM,reference.VDC[0].VRAM);assert.deepEqual(p.VDC[0].SATB,reference.VDC[0].SATB);assert.deepEqual(p.Palette,reference.Palette);
+ render();assert.deepEqual(p.RAM,reference.RAM);assert.deepEqual(p.VDC[0].VRAM,reference.VDC[0].VRAM);assert.deepEqual(p.VDC[0].SATB,reference.VDC[0].SATB);assert.deepEqual(p.Palette,reference.Palette);
  const width=p.ImageData.data.length/4/262;
  for(let y=17;y<128;y++)assert.deepEqual(p.ImageData.data.slice(y*width*4,(y+1)*width*4),reference.ImageData.data.slice(y*width*4,(y+1)*width*4),'title artwork remains native');
  let copyrightPixels=0;
@@ -28,18 +36,29 @@ test('native title font and six-row cursor replace old labels without changing g
    if(dot){const at=((y+dy)*width+64+i*8+dx)*4,rgb=p.ImageData.data.slice(at,at+3);assert.deepEqual([...rgb],white?[252,252,252]:[216,180,216],`${text}, glyph ${i}, ${dx}/${dy}`);}
   }
  }
- checkLabel('1P - SOLO',130);checkLabel('1-5P - NEW',144);checkLabel('2-5P - CAMPAIGN',158);checkLabel('2-5P - BATTLE (ONLINE)',172,false);checkLabel('2-5P - BATTLE (A.I)',186);checkLabel('LOAD SAVE',200,false);
- menu.setSave(true);menu.input('UP');frames(p,1);checkLabel('LOAD SAVE',200);menu.input('RUN');assert.deepEqual(chosen,{mode:'load',count:2});
+ checkLabel('1P - CAMPAIGN',130);checkLabel('1P - DLC',144);checkLabel('2-5P - CAMPAIGN',158);checkLabel('2-5P - BATTLE',172);checkLabel('LOAD SAVE',186,false);
+ menu.setSave(true);menu.input('UP');render();checkLabel('LOAD SAVE',186);menu.input('RUN');assert.deepEqual(chosen,{mode:'load',options:{count:2}});
  const redAt=y=>{let n=0;for(let yy=y;yy<y+16;yy++)for(let x=46;x<60;x++){const at=(yy*width+x)*4;if(p.ImageData.data[at]>200&&p.ImageData.data[at+1]<60&&p.ImageData.data[at+2]<60)n++;}return n;};
- assert.ok(redAt(200)>0,'sixth row has the original red cursor');assert.equal(redAt(130),0);
- menu.input('DOWN');menu.input('DOWN');menu.input('LEFT');assert.equal(menu.count,1);menu.input('RUN');assert.deepEqual(chosen,{mode:'new',count:1});menu.input('DOWN');menu.input('RIGHT');menu.input('RIGHT');menu.input('RIGHT');assert.equal(menu.count,5);menu.input('RUN');assert.deepEqual(chosen,{mode:'campaign',count:5});for(const bots of [1,2,3,4]){menu.input('RIGHT');assert.equal(menu.count,-bots);}frames(p,1);checkLabel('WATCH: 4 AI  LEFT/RIGHT',218,false);menu.input('RUN');assert.deepEqual(chosen,{mode:'campaign',count:-4});for(let i=0;i<4;i++)menu.input('LEFT');assert.equal(menu.count,5);
- menu.close();frames(p,1);frames(reference,3);assert.deepEqual(p.RAM,reference.RAM);assert.deepEqual(p.ImageData.data,reference.ImageData.data,'closing restores the original title rendering');
+ assert.ok(redAt(186)>0,'fifth row has the original red cursor');assert.equal(redAt(130),0);
+ menu.input('DOWN');chosen=null;menu.input('RUN');assert.equal(menu.state.page,'worlds');assert.equal(chosen,null,'opening the picker does not launch yet');render();
+ for(let world=0;world<8;world++)checkLabel(`${world+1}-0`,130+world*11);
+ for(let n=0;n<7;n++)menu.input('DOWN');assert.equal(menu.state.world,7);menu.input('RUN');assert.deepEqual(chosen,{mode:'solo',options:{count:1,world:7}});
+ menu.input('SHOT2');assert.equal(menu.state.page,'main');assert.equal(menu.selected,0,'Button II restores the parent choice');
+ menu.input('DOWN');menu.input('LEFT');assert.equal(menu.count,1);menu.input('RUN');assert.deepEqual(chosen,{mode:'new',options:{count:1}});
+ for(let n=0;n<4;n++)menu.input('RIGHT');assert.equal(menu.count,5);
+ for(const bots of [1,2,3,4]){menu.input('RIGHT');assert.equal(menu.count,-bots);}render();checkLabel('WATCH: 4 AI  LEFT/RIGHT',218,false);menu.input('RUN');assert.deepEqual(chosen,{mode:'new',options:{count:-4}});
+ menu.input('DOWN');menu.input('RUN');assert.equal(menu.state.page,'campaign');render();checkLabel('AI',130);checkLabel('ONLINE',144);menu.input('RUN');assert.deepEqual(chosen,{mode:'campaign',options:{count:-4}});
+ menu.input('DOWN');assert.equal(menu.count,2,'online rooms cannot inherit AI-only counts');menu.input('RUN');assert.deepEqual(chosen,{mode:'online-campaign',options:{count:2}});
+ menu.setCount(-3);assert.equal(menu.count,2);for(let n=0;n<3;n++)menu.input('RIGHT');assert.equal(menu.count,5);menu.input('LEFT');assert.equal(menu.count,4);
+ menu.input('BACK');assert.equal(menu.selected,2);menu.input('DOWN');menu.input('RUN');assert.equal(menu.state.page,'battle');menu.input('RUN');assert.deepEqual(chosen,{mode:'battle-ai',options:{count:4}});menu.input('DOWN');menu.input('RUN');assert.deepEqual(chosen,{mode:'online-battle',options:{count:4}});
+ menu.input('BACK');menu.pointer(130);assert.equal(menu.state.page,'worlds');menu.pointer(130+3*11);assert.deepEqual(chosen,{mode:'solo',options:{count:1,world:3}});menu.input('BACK');menu.pointer(186);assert.deepEqual(chosen,{mode:'load',options:{count:4}});
+ menu.close();render();assert.deepEqual(p.RAM,reference.RAM);assert.deepEqual(p.ImageData.data,reference.ImageData.data,'closing restores the original title rendering');
 });
 test('the replacement menu covers every startup title frame before controls unlock',{skip:!rom},()=>{
  const p=createMachine(fs.readFileSync(rom)),menu=installNativeMenu(p);menu.prepare(4);let menuLines=0,oldInk=0;const sprite=p.MakeSpriteLine;
  p.MakeSpriteLine=function(n){sprite.call(this,n);if(n===0&&this.VDC[0].SATB[2]===918){menuLines++;oldInk+=this.VDC[0].SPLine.filter(dot=>dot.data&&dot.no>=1&&dot.no<12).length;}};
  title(p);assert.equal(menu.active,false);assert.equal(menu.count,4);assert.ok(menuLines>100);assert.equal(oldInk,0,'C-Link/password/prompt sprites never render during startup');
- const width=p.ImageData.data.length/4/262;let bright=0;for(let y=130;y<138;y++)for(let x=64;x<140;x++){const at=(y*width+x)*4;if([0,1,2].every(c=>p.ImageData.data[at+c]===252))bright++;}assert.ok(bright>30,'new Solo choice is already visible');
+ const width=p.ImageData.data.length/4/262;let bright=0;for(let y=130;y<138;y++)for(let x=64;x<140;x++){const at=(y*width+x)*4;if([0,1,2].every(c=>p.ImageData.data[at+c]===252))bright++;}assert.ok(bright>30,'new Campaign choice is already visible');
  menu.open(4);assert.equal(menu.active,true);menu.leave();frames(p,8,[[0,'RUN']]);assert.equal(menu.active,false);
 });
 test('native-menu selection launches the original Solo intro and 2/5-player Battle',{skip:!rom},()=>{

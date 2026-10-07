@@ -6,6 +6,7 @@ const NORMAL_ENEMY_COUNT=23;
 const LIVING_MODEL_COUNT=45;
 const ASSET_BY_TYPE=[1,1,2,2,3,3,4,4,5,5,2,2,3,3,4,4,5,5,1,1,1,1,1,6,6,6,6,7,7,9,9,8,8,8,10,10,10,10,10,10,10,10,10,10,10];
 const assetCache=new WeakMap();
+export const enemyAssetID=type=>ASSET_BY_TYPE[type];
 const readROM=(p,bank,address)=>p.Mapper.Read(bank*8192+(address&8191));
 const wordROM=(p,bank,address)=>readROM(p,bank,address)|(readROM(p,bank,address+1)<<8);
 const signed=byte=>byte<128?byte:byte-256;
@@ -74,9 +75,9 @@ export function enemyCatalog(p){
  if(!isCampaign(p))return [];
  const templates=new Map();for(const enemy of enemies(p))if(enemy.type<NORMAL_ENEMY_COUNT&&!templates.has(enemy.type))templates.set(enemy.type,enemy.slot);
  return Array.from({length:LIVING_MODEL_COUNT},(_,type)=>{
-  const templateSlot=templates.get(type),boss=type>=NORMAL_ENEMY_COUNT;let icon=null;try{icon=decodeSpriteIcon(p,nativeEnemyPose(p,type),templateSlot!==undefined?undefined:nativeEnemyAtlas(p,type));}catch{}
-  const available=!boss&&templateSlot!==undefined&&icon!==null;
-  return {type,name:type===2?'Ballom':boss?`Boss model ${type}`:`Monster type ${type}`,templateSlot,available,icon,notice:available?'Spawn in this stage':boss?'Boss / form preview only':icon?'No living template in this stage':'Native graphics are not loaded'};
+  const templateSlot=templates.get(type),boss=type>=NORMAL_ENEMY_COUNT;let icon=null;try{icon=decodeSpriteIcon(p,nativeEnemyPose(p,type),nativeEnemyAtlas(p,type));}catch{}
+  const available=!boss&&icon!==null&&!(p.RAM[0x43a]&7)&&!p.RAM[0x437];
+  return {type,name:type===2?'Ballom':boss?`Boss model ${type}`:`Monster type ${type}`,templateSlot,available,icon,notice:available?'Spawn in this stage':boss?'Boss / form preview only':icon?'Resume an active campaign stage':'Native graphics are not loaded'};
  });
 }
 

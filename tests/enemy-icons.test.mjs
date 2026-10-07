@@ -41,8 +41,8 @@ test('all 45 living enemy/form icons use private runtime ROM assets and regular 
  const p=createMachine(fs.readFileSync(process.env.BOMBERMAN_TEST_ROM));installCampaignTracker(p);for(const action of launchSequence('solo'))frames(p,action.frames,action.button?[[0,action.button]]:[]);frames(p,2520);
  const before={ram:[...p.RAM],vram:[...p.VDC[0].VRAM],palette:[...p.Palette],pc:p.PC},catalog=enemyCatalog(p);
  assert.equal(catalog.length,45);assert.deepEqual({ram:p.RAM,vram:p.VDC[0].VRAM,palette:p.Palette,pc:p.PC},before,'opening the catalog never advances or edits the emulator');
- assert.equal(catalog.filter(entry=>entry.available).length,1);assert.equal(catalog[2].available,true);assert.ok(Number.isInteger(catalog[2].templateSlot));
- for(const entry of catalog){assert.ok(entry.icon,`native model ${entry.type}`);assert.ok(entry.icon.pixels.some((value,index)=>index%4===3&&value===255));assert.deepEqual(entry.icon.pixels,nativePixels(p,nativeEnemyPose(p,entry.type),entry.available?undefined:nativeEnemyAtlas(p,entry.type)),`native sprite model ${entry.type}`);if(entry.type>=23)assert.equal(entry.available,false,'boss phases and multi-part forms cannot use a normal template clone');}
+ assert.equal(catalog.filter(entry=>entry.available).length,23);assert.equal(catalog[2].available,true);assert.ok(Number.isInteger(catalog[2].templateSlot));
+ for(const entry of catalog){assert.ok(entry.icon,`native model ${entry.type}`);assert.ok(entry.icon.pixels.some((value,index)=>index%4===3&&value===255));assert.deepEqual(entry.icon.pixels,nativePixels(p,nativeEnemyPose(p,entry.type),nativeEnemyAtlas(p,entry.type)),`native sprite model ${entry.type}`);if(entry.type>=23)assert.equal(entry.available,false,'boss phases and multi-part forms cannot use a normal template clone');}
  // Direct ROM decompression agrees with assets really uploaded by the native
  // loader. Other world/boss families use the same bounded asset format.
  const first=nativeEnemyAtlas(p,2),common=nativeEnemyAtlas(p,0);

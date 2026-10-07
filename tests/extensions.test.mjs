@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {createMachine,frames} from '../scripts/headless.mjs';
 import {COLORS,colorizePlayer,installColorSelector} from '../dist/session.js';
-import {createCompanions,isCampaign,tileKind,enemies,spawnItem,spawnEnemy,validateCompanionState,ITEM_CATALOG,DEATH_FRAMES,companionBombSlots} from '../dist/campaign.js';
+import {createCompanions,isCampaign,tileKind,enemies,spawnItem,spawnEnemy,restoreFloor,validateCompanionState,ITEM_CATALOG,DEATH_FRAMES,companionBombSlots} from '../dist/campaign.js';
 import {createBattleAI,launchSequence,battlePosition,activeBattle,validateBattleState} from '../dist/battle-ai.js';
 import {captureState,restoreState} from '../dist/save-state.js';
 const rom=process.env.BOMBERMAN_TEST_ROM,bytes=()=>fs.readFileSync(rom);
@@ -58,7 +58,13 @@ test('native items and living monster templates spawn, move and pick up',{skip:!
  const existing=r.RAM.slice(0xf9b,0xfb4).filter(v=>v&128).length;assert.ok(floor.length>=ITEM_CATALOG.length);for(const [i,item]of ITEM_CATALOG.entries())spawnItem(r,item.type,floor[i].x,floor[i].y);frames(r,8);assert.equal(r.RAM.slice(0xf9b,0xfb4).filter(v=>v&128).length,existing+15);
 });
 test('campaign AI clears blocks, kills native enemies and replays exactly after saving',{skip:!rom},()=>{
- const p=createMachine(bytes()),crew=createCompanions(p,{colorize:colorizePlayer});campaign(p);const human=[p.RAM[0x43d],p.RAM[0x43f]],bot=crew.add(4,1);bot.color='red';advance(p,crew,1500);
+ const p=createMachine(bytes()),crew=createCompanions(p,{colorize:colorizePlayer});campaign(p);
+ const human=[p.RAM[0x43d],p.RAM[0x43f]],bot=crew.add(4,1);bot.color='red';crew.update();assert.equal(bot.bombsPlaced,0,'do not plant when the stationary human blocks the only escape');
+ // Give the bot a real escape beside the starting corridor. The stationary
+ // human occupies its former only safe destination, so bombing there now
+ // correctly waits rather than walking through the human.
+ restoreFloor(p,4,2);restoreFloor(p,4,3);
+ advance(p,crew,1500);
  assert.ok(bot.bombsPlaced>=5);assert.equal(tileKind(p,5,1),10);assert.equal(bot.alive,true);assert.deepEqual([p.RAM[0x43d],p.RAM[0x43f]],human);assert.ok(bot.x!==72||bot.y!==24);for(let n=0;n<1500&&enemies(p).length===3;n++)advance(p,crew,1);assert.ok(enemies(p).length<3,'safe bomb pursuit still kills native enemies');
  const extension=structuredClone(crew.state),tracker={...p._campaignTracker},save=captureState(p,{frame:4336,color:'original'});advance(p,crew,300);const expected={ram:[...p.RAM],pixels:Uint8ClampedArray.from(p.ImageData.data),bots:structuredClone(crew.state)};
  restoreState(p,save);crew.restore(extension);Object.assign(p._campaignTracker,tracker);advance(p,crew,300);assert.deepEqual(p.RAM,expected.ram);assert.deepEqual(p.ImageData.data,expected.pixels);assert.deepEqual(crew.state,expected.bots);
@@ -68,6 +74,9 @@ test('AI reverses an interrupted step away from an approaching monster and refus
  const p=createMachine(bytes()),crew=createCompanions(p);campaign(p);const bot=crew.add(3,1),foe=enemies(p)[0];
  for(let i=0;i<32;i++)if(i!==foe.slot)p.RAM[0xd98+i]=0;
  for(let x=2;x<9;x++)p.RAM[0x44a+32+x]=10;
+ // Leave the retreat corridor free: the native human used to stand at2,1,
+ // exactly where the bot must retreat, and actors no longer walk through it.
+ p.RAM[0x43d]=40;p.RAM[0x43f]=56;p.RAM[0x44a+3*32+2]=10;
  bot.x=60;bot.target={x:4,y:1};bot.cooldown=1000;
  const positionEnemy=x=>{p.RAM[0xdd8+foe.slot]=x;p.RAM[0xdb8+foe.slot]=0;p.RAM[0xe18+foe.slot]=24;p.RAM[0xdf8+foe.slot]=0;};
  for(let n=0;n<12;n++){positionEnemy(86-n*.5|0);const before=bot.x;crew.update();assert.ok(bot.x<=before,'never continue toward the approaching enemy');assert.equal(bot.alive,true);assert.equal(bot.action,'Avoiding monsters');}assert.ok(bot.x<60,'turn back before colliding');
@@ -83,7 +92,8 @@ test('each bot has a separate bomb inventory that leaves human slots alone and u
  const bots=[];for(const [x,y]of [[3,3],[7,3],[3,7],[7,7]]){p.RAM[0x44a+y*32+x+1]=2;bots.push(crew.add(x,y));}crew.update();
  assert.deepEqual(bots.map(b=>b.bombsPlaced),[1,1,1,1]);assert.equal(new Set(bots.map(b=>b.bombBank)).size,4);for(const b of bots)assert.equal(companionBombSlots(b).filter(i=>p.RAM[0x84f+i]&128).length,1);assert.equal(p.RAM.slice(0x84f,0x859).filter(v=>v&128).length,10);assert.ok(p.RAM.slice(0x859,0x863).every(v=>v===0),'native enemy bomb slots remain reserved');
  // Capacity upgrades affect only this actor's reserved inventory.
- const b=bots[0];b.bombCapacity=2;b.cooldown=0;b.x=56;b.y=88;b.target=null;p.RAM[0x44a+5*32+4]=2;crew.update();assert.equal(b.bombsPlaced,2);assert.equal(companionBombSlots(b).filter(i=>p.RAM[0x84f+i]&128).length,2);assert.equal(bots[1].bombsPlaced,1);
+ // Keep the second blast away from the other bots' reserved escape steps.
+ const b=bots[0];b.bombCapacity=2;b.cooldown=0;b.x=184;b.y=88;b.target=null;p.RAM[0x44a+5*32+12]=2;crew.update();assert.equal(b.bombsPlaced,2);assert.equal(companionBombSlots(b).filter(i=>p.RAM[0x84f+i]&128).length,2);assert.equal(bots[1].bombsPlaced,1);
  // The reserved enemy bomb timer should tick once, not twice, per native frame.
  p.RAM[0x84f+10]=128;p.RAM[0x877+10]=12;p.RAM[0x89f+10]=11;p.RAM[0x8ef+10]=150;p.RAM[0x917+10]=255;frames(p,1);assert.equal(p.RAM[0x8ef+10],149);
  frames(p,190);assert.equal(tileKind(p,4,3),10,'a bot bomb beyond the human slots explodes through the original engine');assert.equal(p.RAM[0x84f+20],0);

@@ -1,111 +1,115 @@
 # Bomberman Co-op Lab
 
-Browser extension for **Bomberman (1990), TurboGrafx-16, USA**. The long-term goal is people on separate computers cooperating in the original campaign.
+Browser extension for **Bomberman (1990), TurboGrafx-16, USA**. Public source: [Tkeyro/bomberman-coop](https://github.com/Tkeyro/bomberman-coop). Each player supplies the same verified game file locally.
 
-**v0.3.6 fixes AI-only restarts and speed bonuses, adds a required final item behind a glowing wall, gives red Bomberman green hands/feet, and adds admin enemy previews and human power-up counters.** B for remote detonation, Space to skip the opening, watching 1–4 bots, individual teammate upgrades, generated maps, matching lives-icon colors, exact-position saves, a paused campaign inventory and original Battle with AI opponents remain available. Online rooms are not implemented. Campaign teammates are independent extension actors rendered from the ROM's loaded sprites; their bombs, block destruction and enemy kills use the original game engine. They are not additional native campaign controller ports.
+**v0.4.0 adds online campaign and Battle lobbies, shared campaign upgrades, cooperative AI, a world picker and fresh-level online save recovery.** It also removes the living-template requirement for all 23 regular enemy types and rearranges the HUD with smaller inventory icons and a completely recolored lives head. Campaign companions and remote humans use independent extension actors with the original ROM models and native bombs, collisions and enemy damage. They are additional campaign characters implemented by this extension rather than extra native campaign controller ports.
 
 ## Play
 
-1. Serve `dist/`, for example `python3 -m http.server 8080 --directory dist`.
-2. Open `http://localhost:8080` and load your local `Bomberman (USA).pce`.
-3. Choose your color. The original title screen opens automatically. Use **Up/Down** to select **1P - SOLO**, **1-5P - NEW**, **2-5P - CAMPAIGN**, or **2-5P - BATTLE (A.I)**, **Left/Right** to choose players (1–5 in NEW, 2–5 in the other multiplayer modes), and **Enter** to start. You can also click a menu row. Campaign uses local AI teammates; Battle uses native controller ports driven by AI.
-4. Campaign retains the original opening introduction (about 40 seconds). Press **Space** to skip it, including during the opening fade; holding the skip key will not place a bomb when gameplay starts. The selected color includes the rear-facing introduction pose.
+For local offline play, serve the source assets with `python3 -m http.server 8080 --directory dist`, open `http://localhost:8080` and load your local `Bomberman (USA).pce`. Online rooms need the Worker/D1 deployment described below; the static local server does not provide its API.
 
-The six choices appear inside the original title screen using the ROM's loaded font, native red cursor and landscape. There is no web menu overlay. C-Link and password choices are hidden from the first title-menu frame, including startup and departure. The original copyright glyphs sit eight game pixels lower to leave room below the player-count hint. **2-5P - BATTLE (Online)** is dimmed and displays an unavailable message until online rooms exist. **LOAD SAVE** restores the latest browser save paused after loading the ROM. The original PASSWORD option was a stage/round code; the new save controls preserve the exact emulator and AI state instead.
+Choose your color before starting. The original title screen contains these five choices:
 
-**Main menu** holds your current game in memory while you browse choices. **Continue game** returns to it. Selecting a new game replaces that session; save/export first if you want to keep it after reloading the page.
+| Main menu | Selection |
+| --- | --- |
+| **1P - CAMPAIGN** | World submenu: **1-0**, **2-0** through **8-0**. Start at the selected world's first regular stage. |
+| **1P - DLC** | Generated larger campaign maps, with optional local AI/watch counts. |
+| **2-5P - CAMPAIGN** | Choose **AI** or **ONLINE**. |
+| **2-5P - BATTLE** | Choose **AI** or **ONLINE**; both use original Battle rules. |
+| **LOAD SAVE** | Load the latest browser save; online campaign saves reopen the lobby. |
+
+Use **Up/Down** to select, **Left/Right** to change player/watch counts and **Enter** to choose. In the world submenu, Left/Right also moves between worlds. **B/X** returns from a submenu. Menu rows also support clicking. These choices use the ROM's loaded font, cursor and landscape inside the game screen. C-Link and PASSWORD are hidden; the native copyright line is eight game pixels lower. The former password entry was a stage code, replaced by the save controls.
+
+The original campaign introduction remains available. **Space** skips it, including during its opening fade, without placing a bomb when gameplay begins. The selected color includes the rear-facing introduction pose.
+
+**Main menu** holds an offline game in memory; **Continue game** returns to it. Starting another game replaces that session, so export a save first. For online recovery, return to a reconstructed lobby with the saved player roster.
 
 | Action | Control |
 | --- | --- |
-| Main menu choice / player count / start | Up/Down / Left/Right / Enter |
+| Menu / player count / choose | Up/Down / Left/Right / Enter |
 | Move | Arrows / WASD |
 | Place bomb | Space |
 | Remote detonation / Button II | B or X |
-| Skip opening cutscene | Space |
+| Skip opening | Space |
 | Run / advance Battle results | Enter |
 | Select | Shift |
-| Paused campaign inventory | F2 or Admin button |
+| Paused local campaign inventory | F2 or Admin button |
 
-Collect **Remote Control** first. Your bombs then wait for **B** or **X** (native controller Button II), which detonates them one at a time in placement order. AI teammates control their own bombs.
+After collecting **Remote Control**, your bombs wait for **B/X**. Native solo bombs detonate in placement order; online humans operate their own remote bombs. Local AI chooses its own safe detonation time. Click the canvas to focus controls. Losing focus releases held keys and pauses play.
 
-Click the game screen to focus keyboard controls. Losing focus releases held keys; switching windows pauses play. Browser audio, fullscreen and physical gamepad testing remain outstanding.
+## Online rooms
 
-## NEW campaign
+Choose Campaign → ONLINE or Battle → ONLINE. Enter your name and color, create a lobby and copy its invitation link, or enter a friend's room code and join. The roster shows each person's name, color and readiness. Every player loads the verified local ROM before connecting. The host starts after at least two players are ready and their peer connections are established; rooms support up to five players. The ROM is never sent to the lobby service or another browser.
 
-Choose **1-5P - NEW** for one human plus zero to four local AI teammates. Seeded maps start larger than the opening original map and grow from native bounds 27×21 to 31×29, with more breakable blocks and 14–28 native monsters depending on round and team size. A protected starting area and guaranteed fire-up give you room to begin. Other power-ups are scattered around the map; the blue exit is hidden under a block. Kill every monster, bomb the glowing wall and collect its required item, then uncover/reach the exit to generate the next round. Each round resets the seven-minute clock and brings a fresh team. Maps, round number and generator state are saved with your session. Explosion cleanup restores the original green floor, including outside the original map bounds; previous NEW saves repair their blackened floor on resume.
+In online campaign, each human has a separate actor, bomb inventory and camera. Clients receive the host's ordered input frames and simulate the same shared world. Beneficial campaign pickups improve everyone. A single death leaves surviving players in the round; total team defeat runs the native death music, fades and same-stage retry. Extra lives and original stage transitions remain part of that sequence. Battle uses the original independent controller ports and competitive pickup rules.
 
-This mode currently reuses the original opening region’s loaded tiles and Ballom model, with native music, pickups, bombs, explosions and collisions. Both camera axes follow the larger maps. Difficulty grows through density, size and monster count; comparison with every original late stage/boss has not been playtested. Separate-computer human co-op remains pending.
+Lobby rosters, readiness and WebRTC signaling use same-origin HTTP requests, polled about once per second. Actual gameplay frames and the initial ROM-free emulator snapshot travel over ordered WebRTC data channels. The host samples each participant's latest input for each emulated frame; this version uses neither rollback nor client prediction. Runtime checksums every 120 frames detect divergence. A disconnect, frame-order error or checksum mismatch pauses play; recreate the lobby and load a saved campaign to recover.
 
-Clearing a round runs the original clear music, animation and black fade, then the native stage card (1–2, 1–3 and onward) before the next generated map starts. Human defeat uses the original death music, fades, life deduction and same-round restart; original game-over rules still apply. NEW watching retries a defeated team through that sequence, preserving the selected bot count. Stage cards count eight rounds per displayed region and cycle after 8–8; the page always shows the full NEW round number. Saves resume an unfinished clear, death, fade or stage card.
-
-Solo, Campaign and NEW share a final-item objective. After the last monster dies, a reachable breakable wall glows. Bomb it, wait for the flames to clear, and collect the Bomb Up inside. Any living teammate or the human can satisfy this shared requirement. The blue portal remains locked until that pickup is collected; bots target the wall and item before the exit. If an external bomb destroys the required item, it appears again after the flames clear. Objective progress is saved and resets on stage retry.
-
-## Colors
-
-White, black, blue, green, red, violet, orange and yellow. Nonwhite variants use the selected color for their helmet and blue body regions. Arms and legs use the face's orange skin tone with shading. Red alone has green hands and feet; every other variant retains native pink hands and feet. Original white keeps its complete native appearance. The lives-counter head also matches the selected helmet, including black, orange and yellow; its face and the surrounding HUD retain their native colors. Faces, outlines and original numeric palette/ROM remain intact. Opening rear pose and stage 1 are integration-tested; later campaign stages and all boss scenes still need visual QA.
+The current peer configuration has a STUN server and **no TURN relay**. Some restrictive networks will fail to connect. Live browser play, two real computers, latency, reconnects, mobile controls and long online sessions have not been tested in this environment. Headless and mocked-browser checks are described below.
 
 ## Save and continue
 
-- **Save progress** writes a quick save to this browser's IndexedDB. **LOAD SAVE** restores it paused; press Resume to continue.
-- **Export save** downloads a `.bmsave` backup. **Import save** can continue it on another computer after loading the same ROM.
-- Saves include emulator CPU/RAM/video/audio synthesis state, screen, color, AI actors/plans and menu launch progress. They do not contain the ROM file. The live audio output buffer is cleared on restoration.
-- Clearing site data removes the browser quick save. Export backups for long-term storage. Save format is tied to this extension version and pinned emulator core; incompatible/corrupt files are rejected.
+- **Save progress** writes a quick save to this browser's IndexedDB. **Export save** downloads a `.bmsave` backup. Export before clearing browser data.
+- Offline campaign, DLC, AI/watch and Battle saves restore the emulator and extension state at the saved position, paused. Press Resume to continue.
+- For an **online campaign** save, create or re-create a lobby, reconnect the original players, and select the save through LOAD SAVE/import or the host's lobby save picker. The lobby shows the saved level and roster. Start reloads that level from its beginning with the saved shared upgrades, fresh enemies and a fresh board. It does not resume a partially cleared online level.
+- Returning players are matched by their random IDs kept in their original browser's local storage. Clearing that storage or switching browser profiles changes identity; the saved roster will no longer match. Keep the save backup and the same browser profiles for this version.
+- Save files contain CPU/RAM/video/audio synthesis state, actor plans and powers, colors, stage progress, generated-map state and online roster metadata. They do not contain the ROM. Raw save files stay local or are sent directly between connected peers at launch; the lobby database stores only a bounded stage/roster header and signaling.
 
-While you play a campaign, the top-right high-score area shows native power-up icons and your collected totals. Entries rotate when they exceed that small HUD area; a complete icon/count list below the game remains visible. Counts belong to the human, carry across stages, and are saved. They count pickups collected during this game, including repeated bonuses, rather than claiming temporary effects remain active forever. Earlier saves begin these new counters at zero.
+Save imports require the same ROM revision and compatible extension/core format, and validate bounded state before applying it. The live audio output buffer clears on restoration. Some older offline saves have defaults for newly added optional fields; incompatible or corrupt files are rejected.
 
-## Watch AI play
+## DLC maps and campaign objectives
 
-Choose **AI only — watch (1 bot)**, **(2 bots)**, **(3 bots)** or **(4 bots)** in the player-count selector before starting. In the native menu, press Right past five players, then Left/Right to choose the number of bots. Solo, NEW and Campaign support all four choices; original Battle requires at least two players and supports watching 2–4 bots.
+The **DLC** entry is the former NEW campaign. Seeded maps grow from native bounds 27×21 to 31×29, with more breakable blocks and 14–28 native monsters according to round/team size. The starting area is protected, useful pickups are scattered and the blue exit is hidden. This currently uses the opening world's loaded tiles and Ballom model, with original music, bombs, explosions and pickups. Difficulty increases through map size and density; comparison with every original late stage and boss remains untested. Generated seed, round and transition state survive offline saves.
 
-Campaign modes use the selected number of independent AI actors with no visible or controllable human player. The camera follows a living bot and switches when it dies. In Solo, Campaign and NEW, losing the whole team with no extra lives starts the native death music while the bots finish their death animations, followed by black fades and the same-stage card. The stage restarts automatically with fresh monsters, items, clock and the selected number of bots; NEW retains its seed and round. One bot dying does not restart a surviving team. Extra-life revival searches connected safe floor first and can recover on safe floor elsewhere if the death tile is isolated. It preserves the extra life while no safe tile exists. Battle drives the selected native controller ports; Enter advances results/retry. Save/load and Main menu → Continue game preserve spectator mode and the selected count, including a save during the final death sequence. Earlier four-bot watch saves remain loadable. The campaign planner remains experimental, so bots can die or wait when no safe route exists.
+After killing every monster, bomb the glowing breakable wall, wait for the flames to clear and collect its required Bomb Up. Then uncover/reach the blue exit. This shared final-item objective also applies to the original campaign. If the required item burns, it reappears after the flames clear. Bots target the wall and pickup before the exit; living enemies prevent early exit. Explosion cleanup restores green floor, including previously collected item tiles and areas beyond the original map bounds.
 
-## Local admin inventory and AI
+Clears and defeats run native music, animation, black fades and stage cards before loading the next or retried stage. Human offline lives/game over follow original rules. AI-only teams retry through the native sequence when every actor is defeated, preserving watch count and, in DLC, the current seed and round. One defeated actor does not restart a surviving watched team.
 
-During an active campaign stage, press **F2**. Emulation pauses. Select an item, bomb, monster or AI Bomberman once, then click multiple empty tiles to place copies. The selected tool stays highlighted. Click that tool again or Deselect to stop; choosing another tool switches selection. Close the dialog/F2 to resume and clear the placement tool. If already paused, closing keeps it paused.
+## Colors and HUD
 
-All 15 native item IDs are available: fire up, bomb up, remote control, roller shoes, bomb pass, wall pass, fireproof vest, extra life, skull and six bonus items. The monster grid previews all 45 living native actor models, including boss forms and parts, using graphics decoded from your ROM at runtime. Spawnable buttons clone living, non-boss templates loaded in the current stage. Unavailable types remain visible with disabled buttons; boss forms are preview-only because cloning does not initialize their multipart behavior. Item and enemy slots retain original engine limits. Pickups activate when collected, not merely when spawned. The fireproof vest grants about 60 seconds of bomb-blast protection; enemies still cause damage, matching the original game.
+Choose white, black, blue, green, red, violet, orange or yellow. Nonwhite variants tint the helmet and original blue body, with face-colored arms/legs and shading. Gloves/boots stay pink except **red**, whose ends are green. Original white retains its native appearance. The lives head matches all selected helmet pixels, including the former white highlights, while face, outlines and HUD border keep their native colors.
 
-Up to four local AI teammates receive a random color, including white. Safety comes first: they avoid known blast paths and nearby monsters, and turn back when an enemy approaches during a step. Campaign bots observe monster movement and check projected positions up to 24 frames ahead. Bomb escape routes avoid that predicted danger. They back away from an approaching monster instead of waiting at a barely safe cell when an escape is available. Motion history is saved. On safe ground they prioritize reachable useful power-ups before fighting or clearing blocks, avoid skulls, and reject bomb placements whose blast would hit any visible item. Hidden items become goals after they are revealed. Battle AI follows the collection/protection priorities, using the native player pickup effects.
+Score digits align left, and time/lives also move left. Acquired power-up totals occupy the right in two rows of **8-pixel HUD icons**; world pickups and full-size icon lists retain their native 16-pixel artwork. Entries page only when large totals exceed the available space. Counts are cumulative pickups, rather than a promise that temporary effects remain active. Counters and page timing are saved; older offline saves begin new counters at zero.
 
-Campaign teammates collect their own upgrades: fire range up to five tiles, bomb allowance up to five, roller shoes, remote control, bomb pass, wall pass, a 60-second fireproof vest and extra lives. These do not upgrade the human or other bots. Roller Shoes match the native movement increase from 0.75 to 1 pixel per frame; repeated shoes do not stack additional speed. Remote bombs wait until the team is outside their blast and visible items are safe; active bombs retain their owner's placement-time range. Bonus items are collected and counted, but extension actors do not add their native bonus score to the human's score. Teammate upgrades, remote timers and active bomb ranges are included in saves.
+## Local inventory and cooperating AI
 
-They seek breakable blocks and enemies, place original-engine bombs when an escape route exists, keep moving when a bomb position is unsafe, and seek a revealed exit only when no living monsters remain. Defeated teammates stop moving/placing bombs and play the original 104-frame collapse/explosion animation; an extra life revives them on safe floor, including outside an isolated death-cell component, when available. A save made during that animation continues it on load. Teammates and upgrades carry across original stage transitions; NEW rounds bring a fresh team. Their planner is experimental and they can die. Their feet collide with pillars and blocks unless they have the corresponding pass upgrade, and sprite placement uses the native camera alignment. Native player palette flashes do not hide teammates. Each teammate has its own reserved bomb slots, separate from the human and native enemies; native timers cover these slots without double-ticking enemy bombs. The inventory shows each actor's bombs, fire range and collected-item count. Native enemy targeting of extension teammates remains unimplemented. Solo's native player rules remain authoritative.
+In a local campaign stage, **F2/Admin** pauses play. Select a tool once, then click multiple empty tiles to place copies. Clicking the selected tool or Deselect stops placement. Closing clears the tool and restores the preceding pause/running state. Online gameplay disables this local inventory so clients cannot mutate their shared simulation independently.
 
-Monster bombing positions use each bot's actual fire range and unobstructed rows/columns. Observed horizontal or vertical patrols supply interception positions; pillars and blocks stop the prediction. Normal bombs consider the monster's expected corridor position around fuse expiry, including reversals, before planting. Bots can approach a corridor opening and wait for an interception opportunity instead of repeatedly bombing behind a pillar. Unexpected turns can still make a trap miss.
+The inventory has all 15 native item IDs and icons for all 45 living enemy actor models, including boss forms/parts. **All 23 regular enemy types can spawn in any active campaign stage, even after the last native enemy dies.** They use their native initialization, movement and bomb damage. Their runtime graphics remain private to their sprites so mixed species do not replace player or stage art. Boss entries remain previews: spawning a component alone would omit the coordinated actor groups and shared state of a complete boss encounter. Original slot limits still apply. A spawned item takes effect when collected; the fireproof vest protects against bomb blasts for about 60 seconds, while monsters still hurt its wearer.
 
-Campaign footsteps and death request the original ROM sound effects through its sound manager. Steps only play while feet actually move; death plays once when damage defeats the actor. Native sound priorities protect higher-priority effects, and the existing mute/pause controls apply. No extracted audio files are bundled.
+Local AI uses separate targets for useful items, blocks and enemy bombing positions. It reserves occupied and intended next cells, yields into available space when routes conflict, and can separate older saved actors that started overlapped. It refuses a new bomb whose blast contains a teammate's current or intended next tile. These guards complement existing monster prediction, escape routes, item protection and final-item-before-exit priorities. They reduce crowding and friendly fire but cannot guarantee survival or solve every blocked corridor.
 
-AI bombs now use normal Bomberman explosions in all four directions. The earlier automatic-fuse flag also selected the native enemy bomb's directional behavior, suppressing upward blasts and stopping propagation at fading flame centers. New AI bombs avoid that flag; compatibility reads correct existing saved AI bombs while keeping the human's remote power separate from their timers. NEW also repairs stale ordinary terrain and collected-pickup markers, while preserving live pickups and hidden item/exit encoding.
+Beneficial **campaign team** pickups are shared across the native human and every AI/online teammate. Fire range and bomb allowance cap at five per actor in cooperative modes; each actor keeps its own active bomb slots. Shoes match the native increase from 0.75 to 1 pixel per frame and do not stack. Remote/pass powers, vest duration and extra-life rewards reach the team; lives are consumed individually. Skull curses are excluded from shared rewards. A new teammate inherits the team's current upgrades. Original one-player pickup behavior remains native until a cooperative team is added; Battle remains competitive.
 
-Admin privileges apply to the local browser session; this is not an online account/role system. No network server or authentication service is present.
+Bots prioritize useful reachable pickups, avoid skulls, and reject bombs that would destroy visible items. They predict nearby monster movement and patrol corridors, approach useful bombing openings and seek the exit after enemies and the required item are handled. Death uses the native 104-frame sprite animation and sound; walking requests native step sounds only when feet move. Extra-life revival searches safe unoccupied floor and waits if none exists. Their state, goal claims, yielding, motion history, powers and bomb ranges replay through offline saves. Native enemy targeting of extension actors and full boss encounters still need further work.
 
-For planned online co-op, each browser will follow its assigned human player with its own local camera. Players will share monsters, bombs, pickups and stage progress, but can see different parts of the map. Camera offsets must be separated from shared emulator state before network replay is added; the current local camera hooks are not a completed online implementation. See the [camera plan](docs/coop-plan.md#independent-online-cameras).
+Choose **AI only — watch 1, 2, 3 or 4 bots** through the count selector or native Left/Right count choices. Campaign/DLC support all four choices; Battle watching requires at least two actors. The hidden native human receives no controls or shared pickup rewards; the camera follows a living actor. Local admin AI can also be added to a solo campaign with random colors, including white.
 
-## Verification
+## Hosting and verification
 
-`npm test` runs dependency-free Node tests. Include an external game file to run integration checks:
+`server/lobby.js` is a Cloudflare Worker/D1 room API. Its schema and immutable migration journal are under `drizzle/`. `scripts/build-online-site.mjs` embeds the existing `dist/` assets into a single Worker, retains the Site identity, and writes Worker/migration deployment metadata without deleting source assets. Worker hosting requires `d1: "DB"` and no `static` declaration in `.openai/hosting.json`. Serve static `dist/` only for offline development. No separate Node game server is needed for this transport.
+
+No paid hosting budget has been selected. Measure lobby queries, active room/player counts, signaling volume, peer frame traffic and any future TURN relay traffic before estimating costs. D1 handles lobby records/signaling, not 60 Hz gameplay. See the [co-op plan](docs/coop-plan.md) for acceptance checks and remaining release work.
+
+Run dependency-free Node checks with an external ROM:
 
 ```sh
 BOMBERMAN_TEST_ROM=/absolute/path/to/game.pce npm test
 ```
 
-Checks cover revision rejection, palette restoration and suit colors, rear-facing intro, native menu font/cursor pixels and navigation, original campaign controls, lives-icon recoloring, generated map connectivity/scrolling/exit progression, native item pickup/monster spawning, independent bomb inventories and monster avoidance, independent AI block clearing and enemy kills, native Battle actors/controllers/bombs, exposed-exit stage clear, and deterministic emulator/AI save replay. Power-up checks cover collection priority, visible-item protection, skull avoidance, individual upgrades, extended native blasts, remote detonation, pass abilities, vest expiry, extra-life revival and upgraded save replay. Additional checks cover repeated blasts on collected/stale pickup terrain, native PSG step/death output and pending-audio replay, predictive monster retreat and cleared fire groups on retry. A mocked DOM integration test exercises keyboard menu/admin/save wiring, all four watch counts, LOAD SAVE, returning from the menu and an automatic NEW retry after loading a dying team, early/held Space intro skipping, and B/X shared-button release; it is **not real browser QA**. Native checks also cover queued intro-skip save replay, normal bomb timers and the human Remote Control pickup, waiting bombs, ordered detonation and separate AI/enemy bombs. v0.3.5 adds stage-card digits, clear/death music and full-black fades, human/watch same-round retry, saves during native transitions, four-direction blasts in every AI bank including legacy saves and overlapping flame centers, and a surviving range-one bot killing a corridor monster after approaching the opening. v0.3.6 additionally checks original SOLO/CAMPAIGN spectator retries and save replay, safe extra-life fallback, native Roller Shoes scaling, required-wall/item/exit ordering, every native enemy preview, and human power-up counting/pagination. Remaining browser checks include audible playback, layout, fullscreen, real gamepads, mobile and long sessions.
+Tests cover native menu/world navigation, colors/intro/lives pixels, compact HUD scaling without world-art changes, unrestricted native enemy initialization and compositor replay, shared pickup effects and pending-handler saves, AI goal/reservation/yielding and bomb guards, native transitions, camera separation, independent remote actor movement/bombs/deaths and offline save replay. A 10,000-frame two-machine replay test compares CPU/RAM/actor state while local views differ and exercises team deaths/retries. SQLite-backed server tests execute the production migration and SQL for authorization, bounded bodies, concurrent seats/start races, signaling privacy/order/expiry, saved rosters and reproducible Worker builds. Mocked browser-app tests connect separate app contexts, synchronize human inputs and reconstruct an online saved roster. These checks do not replace real-browser, audible sound, fullscreen, physical gamepad, mobile or two-computer QA.
 
-Local research helpers:
+Research helpers take outputs outside this repository:
 
 ```sh
 node scripts/investigate.mjs /absolute/path/to/game.pce /outside/repository/output
 node scripts/headless.mjs /absolute/path/to/game.pce /outside/repository/output
 ```
 
-Keep generated RAM, video, traces and saves outside the public repository. The browser research panel downloads an 8 KiB RAM dump or a bounded 120-frame player-region write trace.
-
-The ROM is read in browser memory. There is no upload endpoint, bundled ROM, extracted artwork/music, screenshot or save file in this repository. Each page load requires selecting the same verified USA ROM revision. A ROM contains compiled machine code; original source names, comments and build files are not recoverable automatically.
-
-See [research findings](docs/research.md) and the [co-op plan](docs/coop-plan.md). Public source: [Tkeyro/bomberman-coop](https://github.com/Tkeyro/bomberman-coop).
+Do not commit ROMs, decoded artwork/music, screenshots, RAM dumps, traces or save files. The game file is read in browser memory; no ROM upload endpoint exists. A ROM contains compiled code, so original source names/comments/build files cannot be recovered automatically. See [research findings](docs/research.md).
 
 ## Emulator provenance
 
 [yhzmr442/jspce](https://github.com/yhzmr442/jspce), pinned to `d4339bae5fb2253b8b3d110e256405d928a3afc4`. `dist/vendor/pce.js` preserves upstream `PCE.js` with an ES-module export appended; its MIT license is included.
 
-Native [Beetle PCE Fast](https://github.com/libretro/beetle-pce-fast-libretro) was used for independent reference checks and is not bundled. Application code is MIT licensed. This independent project does not provide a license to the original game.
+Native [Beetle PCE Fast](https://github.com/libretro/beetle-pce-fast-libretro) provided independent reference checks and is not bundled. Application code is MIT licensed. This independent project does not provide a license to the original game.

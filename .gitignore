@@ -9,3 +9,5 @@ lab-output/
 upload/
 research/native/output/
 site-artifact.tar.gz
+dist/server/
+dist/.openai/
