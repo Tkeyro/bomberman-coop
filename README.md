@@ -2,6 +2,8 @@
 
 Browser extension for **Bomberman (1990), TurboGrafx-16, USA**. Public source: [Tkeyro/bomberman-coop](https://github.com/Tkeyro/bomberman-coop). Each player supplies the same verified game file locally.
 
+**v0.4.5 makes game-screen clicks focus only.** Click to return keyboard control, then use the keys to choose a menu option. Clicking does not select an option or resume a paused game; use Resume for that.
+
 **v0.4.4 allows AI teammates to pass through each other while preferring separate routes and goals.** Bots coordinate a firing position and wait for teammates to reach shelter before bombing. Round placement uses safe floor connected to the original entrance, including temporary overlap when the opening is small. Surviving admin-added DLC teammates retain their identities, colors and upgrades into the next round. Online guests can catch up after falling behind; the host limits outstanding frames instead of letting delay grow into a queue overflow. Temporary lobby-service interruptions retry while healthy peer gameplay continues.
 
 **v0.4.3 gives Solo AI the original finite campaign life stock.** When its final life is lost, the original death music and fade finish and the main menu becomes usable again. Solo AI no longer receives a forced spare life on each defeat. Existing cooperative watch and online team retry rules are preserved.
@@ -26,7 +28,7 @@ Choose your color before starting. The original title screen contains these five
 | **2-5P - BATTLE** | Choose **AI** or **ONLINE**; both use original Battle rules. |
 | **LOAD SAVE** | Load the latest browser save; online campaign saves reopen the lobby. |
 
-Use **Up/Down** to select, **Left/Right** to change player/watch counts and **Enter** to choose. In the world submenu, Left/Right also moves between worlds. **B/X** returns from a submenu. Menu rows also support clicking. These choices use the ROM's loaded font, cursor and landscape inside the game screen. C-Link and PASSWORD are hidden; the native copyright line is eight game pixels lower. The former password entry was a stage code, replaced by the save controls.
+Use **Up/Down** to select, **Left/Right** to change player/watch counts and **Enter** to choose. In the world submenu, Left/Right also moves between worlds. **B/X** returns from a submenu. Click the game screen to focus keyboard controls without selecting a menu option. These choices use the ROM's loaded font, cursor and landscape inside the game screen. C-Link and PASSWORD are hidden; the native copyright line is eight game pixels lower. The former password entry was a stage code, replaced by the save controls.
 
 The original campaign introduction remains available. **Space** skips it, including during its opening fade, without placing a bomb when gameplay begins. The selected color includes the rear-facing introduction pose.
 
@@ -43,7 +45,7 @@ The original campaign introduction remains available. **Space** skips it, includ
 | Select | Shift |
 | Paused local campaign inventory | F2 or Admin button |
 
-After collecting **Remote Control**, your bombs wait for **B/X**. Native solo bombs detonate in placement order; online humans operate their own remote bombs. Local AI chooses its own safe detonation time. Click the canvas to focus controls. Losing focus releases held keys and pauses play.
+After collecting **Remote Control**, your bombs wait for **B/X**. Native solo bombs detonate in placement order; online humans operate their own remote bombs. Local AI chooses its own safe detonation time. Click the canvas to focus controls. Leaving the game screen releases held keys; switching windows or hiding the tab also pauses play. Press Resume to continue a paused game.
 
 ## Online rooms
 

@@ -75,7 +75,7 @@ function finishTrace(){if(!pendingTrace)return;const result=pendingTrace.hook.fi
 async function pause(reason='The game is paused.'){
  if(onlinePhase==='play'&&onlineRoom?.room){onlinePhase='paused';if(onlineRoom.host)onlineRoom.broadcast({type:'pause',reason});else onlineRoom.toHost({type:'pause-request',reason});}
  running=false;accumulator=0;releaseKeys();$('pause-btn').textContent=returnSave?'Continue game':'Resume';
- if(onlinePhase==='paused'&&onlineRoom?.room)$('menu-status').textContent=reason+' Press Resume or click the game screen to continue.';
+ if(onlinePhase==='paused'&&onlineRoom?.room)$('menu-status').textContent=reason+' Press Resume to continue.';
  // Browser audio suspension can remain pending under autoplay restrictions.
  // Simulation and snapshot synchronization must never wait for an audio promise.
  try{machine?.WebAudioCtx?.suspend()?.catch(()=>{});}catch{}
@@ -293,7 +293,7 @@ window.addEventListener('keydown',event=>{
  held.add(event.code);machine['SetButton'+binding[1]](binding[0]);
 });
 window.addEventListener('keyup',event=>{if(consumed.delete(event.code)){event.preventDefault();return;}if(!held.delete(event.code))return;if(onlineGame()){updateOnlineInput();return;}const [port,button]=KEY_BINDINGS[event.code];if(![...held].some(code=>KEY_BINDINGS[code][0]===port&&KEY_BINDINGS[code][1]===button))machine['UnsetButton'+button](port);});
-canvas.addEventListener('click',async event=>{if(!nativeMenu?.active){if(onlineGame()&&onlinePhase==='paused'&&!busy)await resume();return;}if(boot.length||busy)return;unlockAudio();if(!running)await resume();canvas.focus({preventScroll:true});const rect=canvas.getBoundingClientRect();nativeMenu.pointer((event.clientY-rect.top)*canvas.height/rect.height);});
+canvas.addEventListener('click',()=>{canvas.focus({preventScroll:true});if(machine)unlockAudio();});
 canvas.addEventListener('blur',()=>{releaseKeys();consumed.clear();});window.addEventListener('blur',()=>{releaseKeys();consumed.clear();if(running)pause('A player switched away from the game.');});document.addEventListener('visibilitychange',()=>{if(document.hidden&&running){consumed.clear();pause('A player hid the game tab.');}});
 function finishSoloAI(){
  pendingSoloGameOver=false;started=false;initialBots=0;boot=[];returnSave=null;mode='solo';count=-1;
