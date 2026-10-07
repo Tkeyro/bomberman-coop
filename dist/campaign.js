@@ -1,4 +1,5 @@
 import {COLORS} from './session.js';
+export const companionBombSlots=bot=>Array.from({length:5},(_,i)=>20+bot.bombBank*5+i);
 export const ITEM_CATALOG = [
  ['fire','Fire up',0],['bomb','Bomb up',1],['remote','Remote control',2],['speed','Roller shoes',3],
  ['bomb-pass','Bomb pass',4],['wall-pass','Wall pass',5],['fireproof','Fireproof vest',6],['life','Extra life',7],['skull','Skull / curse',8],
@@ -19,6 +20,8 @@ export function canOccupy(p,x,y){
  for(const cx of [Math.floor((x-5)/16),Math.floor((x+5)/16)])for(const cy of [Math.floor((y-5)/16),Math.floor((y+5)/16)])if([1,2,3,4,5].includes(tileKind(p,cx,cy)))return false;
  return true;
 }
+function blockedOverlap(p,x,y){let area=0;for(let cy=Math.floor((y-5)/16);cy<=Math.floor((y+5)/16);cy++)for(let cx=Math.floor((x-5)/16);cx<=Math.floor((x+5)/16);cx++)if([1,2,3,4,5].includes(tileKind(p,cx,cy)))area+=Math.max(0,Math.min(x+5,(cx+1)*16)-Math.max(x-5,cx*16))*Math.max(0,Math.min(y+5,(cy+1)*16)-Math.max(y-5,cy*16));return area;}
+const canStep=(p,x,y,nx,ny)=>canOccupy(p,nx,ny)||blockedOverlap(p,nx,ny)<blockedOverlap(p,x,y);
 export function playerPosition(p){return {x:p.RAM[0x43d]|p.RAM[0x43e]<<8,y:p.RAM[0x43f]|p.RAM[0x440]<<8};}
 export function bombs(p) {
  const result=[];
@@ -44,6 +47,38 @@ export function dangerCells(p) {
  for(let y=1;y<(p.RAM[0x435]||12);y++)for(let x=2;x<(p.RAM[0x434]||15);x++)if([6,11,12].includes(tileKind(p,x,y)))danger.add(key(x,y));
  return danger;
 }
+const monsterClearance=(foes,x,y)=>Math.min(Infinity,...foes.map(e=>Math.max(Math.abs(e.x-x),Math.abs(e.y-y))));
+function monsterCells(p,foes,radius=24){
+ const cells=new Set();
+ for(const e of foes)for(let y=Math.floor((e.y-radius)/16);y<=Math.floor((e.y+radius)/16);y++)for(let x=Math.floor((e.x-radius)/16);x<=Math.floor((e.x+radius)/16);x++)if(walkable(p,x,y)&&Math.abs(x*16+8-e.x)<radius&&Math.abs(y*16+8-e.y)<radius)cells.add(key(x,y));
+ return cells;
+}
+function attackCells(p,foes){const cells=new Set();for(const foe of foes){const queue=[{x:Math.floor(foe.x/16),y:Math.floor(foe.y/16),steps:0}],seen=new Set();for(let i=0;i<queue.length;i++){const n=queue[i],k=key(n.x,n.y);if(seen.has(k))continue;seen.add(k);cells.add(k);if(n.steps===3)continue;for(const [dx,dy]of NEIGHBORS)if(walkable(p,n.x+dx,n.y+dy))queue.push({x:n.x+dx,y:n.y+dy,steps:n.steps+1});}}return cells;}
+// Reconsider an interrupted step without cutting a corner through a block.
+function retreatRoute(p,bot,foes,danger,monsterDanger){
+ const start={x:Math.floor(bot.x/16),y:Math.floor(bot.y/16)},clearance=monsterClearance(foes,bot.x,bot.y),unsafe=new Set([...danger,...monsterDanger]),blocked=monsterCells(p,foes,12);
+ const escapingBomb=danger.has(key(start.x,start.y));
+ if(!escapingBomb)for(const cell of danger)blocked.add(cell);
+ for(let y=1;y<(p.RAM[0x435]||12);y++)for(let x=2;x<(p.RAM[0x434]||15);x++)if([6,11,12].includes(tileKind(p,x,y)))blocked.add(key(x,y));
+ let best=null,fallback=null;
+ for(const cell of [start,...NEIGHBORS.map(([dx,dy])=>({x:start.x+dx,y:start.y+dy}))]){
+  if(!walkable(p,cell.x,cell.y)||blocked.has(key(cell.x,cell.y)))continue;
+  const dx=cell.x*16+8-bot.x,dy=cell.y*16+8-bot.y,distance=Math.abs(dx)+Math.abs(dy);
+  if(Math.abs(dx)>.01&&Math.abs(dy)>.01)continue;
+  let safe=true;
+  for(let step=1;step<=Math.ceil(distance/.75);step++){
+   const fraction=Math.min(1,step*.75/distance),x=bot.x+dx*fraction,y=bot.y+dy*fraction,nextClearance=monsterClearance(foes,x,y),kind=tileKind(p,Math.floor(x/16),Math.floor(y/16));
+   const previous=Math.max(0,(step-1)*.75/distance);
+   if(!canStep(p,bot.x+dx*previous,bot.y+dy*previous,x,y)||[6,11,12].includes(kind)||nextClearance<10||(clearance<32&&nextClearance<clearance-.01)){safe=false;break;}
+  }
+  if(!safe)continue;
+  const tail=findPath(p,cell,n=>!unsafe.has(key(n.x,n.y)),{allowDanger:true,blocked,maxSteps:7}),prefix=distance>.01?[cell]:[];
+  const separation=monsterClearance(foes,cell.x*16+8,cell.y*16+8);
+  if(tail){const route=[...prefix,...tail],score=distance/16+tail.length;if(!best||score<best.score||(score===best.score&&separation>best.separation))best={route,score,separation};}
+  if(prefix.length&&separation>clearance&&(!fallback||separation>fallback.separation))fallback={route:prefix,separation};
+ }
+ return best?.route??fallback?.route??[];
+}
 export function findPath(p,start,goal,{danger=new Set(),allowDanger=false,blocked=new Set(),maxSteps=1024}={}) {
  const queue=[{x:start.x,y:start.y,path:[]}],seen=new Set([key(start.x,start.y)]);
  for(let n=0;n<queue.length;n++){
@@ -57,12 +92,12 @@ export function findPath(p,start,goal,{danger=new Set(),allowDanger=false,blocke
  return null;
 }
 function requireFloor(p,x,y){if(!isCampaign(p)||(p.RAM[0x43a]&7)||p.RAM[0x437])throw new Error('Open the admin menu during an active campaign stage.');if(!Number.isInteger(x)||!Number.isInteger(y)||!walkable(p,x,y)||tileKind(p,x,y)!==10)throw new Error('Choose an empty floor tile.');}
-export function spawnBomb(p,x,y) {
+export function spawnBomb(p,x,y,{slots=Array.from({length:10},(_,i)=>i),automatic=false}={}) {
  requireFloor(p,x,y);
  if(bombs(p).some(b=>b.x===x&&b.y===y))throw new Error('There is already a bomb on that tile.');
- const slot=Array.from({length:10},(_,i)=>i).find(i=>p.RAM[0x84f+i]===0);
+ const slot=slots.find(i=>p.RAM[0x84f+i]===0);
  if(slot===undefined)throw new Error('The original campaign bomb slots are full.');
- p.RAM[0x84f+slot]=0x80;p.RAM[0x877+slot]=x;p.RAM[0x89f+slot]=y;
+ p.RAM[0x84f+slot]=automatic?0xc0:0x80;p.RAM[0x877+slot]=x;p.RAM[0x89f+slot]=y;
  p.RAM[0x8c7+slot]=0;p.RAM[0x8ef+slot]=150;p.RAM[0x917+slot]=255;
  return slot;
 }
@@ -92,7 +127,7 @@ export function spawnEnemy(p,templateSlot,x,y) {
  return slot;
 }
 export function nearestFreeTile(p,start,blocked=new Set()) {
- const tile=findPath(p,start,n=>walkable(p,n.x,n.y)&&!blocked.has(key(n.x,n.y)),{blocked});
+ const tile=findPath(p,start,n=>tileKind(p,n.x,n.y)===10&&!blocked.has(key(n.x,n.y)),{blocked});
  if(tile?.length)return tile.at(-1);
  if(tile&&tileKind(p,start.x,start.y)===10&&!blocked.has(key(start.x,start.y)))return start;
  for(let y=1;y<(p.RAM[0x435]||12);y++)for(let x=2;x<(p.RAM[0x434]||15);x++)if(walkable(p,x,y)&&tileKind(p,x,y)===10&&!blocked.has(key(x,y)))return {x,y};
@@ -131,10 +166,14 @@ export function createCompanions(p,{colorize}={}) {
  const state={bots:[],stage:null,nextID:1,steps:0,events:[],active:false};
  const paletteCache=new Map();
  const originalSpriteLine=p.MakeSpriteLine;
+ const cpu=p.CPURun;
+ // Campaign normally ticks ten human bomb slots; native drawing supports forty.
+ p.CPURun=function(){const campaign=this.MPR[4]===9*8192&&this.RAM[0x84a]<8,extended=campaign&&this.PC===0x9080,skipEnemySlots=campaign&&this.PC===0x90aa&&this.X===20;const result=cpu.call(this);if(extended)this.X=39;else if(skipEnemySlots)this.X=9;return result;};
  function add(x,y) {
   requireFloor(p,x,y);if(state.bots.filter(visibleBot).length>=4)throw new Error('Maximum four AI teammates on screen. Wait for a death animation to finish.');
   const variants=Object.keys(COLORS),color=variants[Math.floor(Math.random()*variants.length)];
-  const bot={id:state.nextID++,x:x*16+8,y:y*16+8,color,alive:true,deathFrame:null,target:null,route:[],cooldown:0,direction:2,animation:0,action:'Exploring',bombsPlaced:0};
+  const bombBank=[0,1,2,3].find(bank=>!state.bots.some(b=>visibleBot(b)&&b.bombBank===bank)&&companionBombSlots({bombBank:bank}).every(i=>p.RAM[0x84f+i]===0));if(bombBank===undefined)throw new Error('Wait for the previous teammate bombs to finish.');
+  const bot={id:state.nextID++,x:x*16+8,y:y*16+8,color,alive:true,deathFrame:null,bombBank,bombCapacity:1,target:null,route:[],cooldown:0,direction:2,animation:0,action:'Exploring',bombsPlaced:0};
   state.stage=stageID(p);state.bots=state.bots.filter(visibleBot);state.bots.push(bot);return bot;
  }
  function record(bot,text){state.events.push({frame:state.steps,bot:bot.id,text});if(state.events.length>40)state.events.shift();}
@@ -145,7 +184,7 @@ export function createCompanions(p,{colorize}={}) {
   if((p.RAM[0x43a]&7)||p.RAM[0x437]){state.active=false;return;}
   state.active=true;
   state.steps++;
-  const danger=dangerCells(p),foes=enemies(p),nowBombs=bombs(p);
+  const danger=dangerCells(p),foes=enemies(p),monsterDanger=monsterCells(p,foes),allDanger=new Set([...danger,...monsterDanger]),attackZone=attackCells(p,foes),nowBombs=bombs(p);
   for(const bot of state.bots){
    if(!bot.alive)continue;
    const tx=Math.floor(bot.x/16),ty=Math.floor(bot.y/16),kind=tileKind(p,tx,ty);
@@ -153,38 +192,39 @@ export function createCompanions(p,{colorize}={}) {
     bot.alive=false;bot.deathFrame=0;bot.target=null;bot.route=[];bot.action='Defeated';record(bot,'Defeated by explosion or enemy');continue;
    }
    if(bot.cooldown>0)bot.cooldown--;
+   const start={x:tx,y:ty},centered=Math.abs(bot.x-(tx*16+8))<.01&&Math.abs(bot.y-(ty*16+8))<.01;
+   const blast=blastCells(p,tx,ty),enemyApproach=attackZone.has(key(tx,ty));
+   const useful=NEIGHBORS.some(([dx,dy])=>[2,3,4].includes(tileKind(p,tx+dx,ty+dy)))||enemyApproach;
+   if(centered&&useful&&!bot.cooldown&&!danger.has(key(tx,ty))&&monsterClearance(foes,bot.x,bot.y)>=16&&!nowBombs.some(b=>b.x===tx&&b.y===ty)){
+    const proposed=new Set([...allDanger,...blast]),escape=findPath(p,start,n=>!proposed.has(key(n.x,n.y)),{allowDanger:true,blocked:allDanger,maxSteps:5}),person=playerPosition(p);
+    if(escape?.length&&!blast.has(key(Math.floor(person.x/16),Math.floor(person.y/16)))){
+     const slots=companionBombSlots(bot);
+     try{if(slots.filter(i=>p.RAM[0x84f+i]).length>=bot.bombCapacity)throw new Error('Own bombs are still active');spawnBomb(p,tx,ty,{slots,automatic:true});bot.bombsPlaced++;bot.cooldown=60;bot.route=escape;bot.target=bot.route.shift();bot.action='Bombing and escaping';record(bot,'Placed original-engine bomb');continue;}catch{}
+    }
+   }
+   if(danger.has(key(tx,ty))||monsterClearance(foes,bot.x,bot.y)<32||(bot.target&&monsterDanger.has(key(bot.target.x,bot.target.y)))){
+    bot.route=retreatRoute(p,bot,foes,danger,monsterDanger);bot.target=bot.route.shift()??null;bot.action=danger.has(key(tx,ty))?'Escaping':'Avoiding monsters';
+    if(!bot.target)continue;
+   }
    if(bot.target){
     const dx=bot.target.x*16+8-bot.x,dy=bot.target.y*16+8-bot.y;
     if(!walkable(p,bot.target.x,bot.target.y)){bot.target=null;bot.route=[];continue;}
     const move=Math.min(.75,Math.abs(dx||dy)),nextX=bot.x+(dx?Math.sign(dx)*move:0),nextY=bot.y+(!dx&&dy?Math.sign(dy)*move:0);
-    if(!canOccupy(p,nextX,nextY)){bot.target=null;bot.route=[];bot.action='Blocked';continue;}
+    if(!canStep(p,bot.x,bot.y,nextX,nextY)){bot.target=null;bot.route=[];bot.action='Blocked';continue;}
     bot.x=nextX;bot.y=nextY;if(dx)bot.direction=dx>0?1:3;else if(dy)bot.direction=dy>0?2:0;
     bot.animation=(bot.animation+1)%32;
     if(Math.abs(dx)+Math.abs(dy)<=.75){bot.x=bot.target.x*16+8;bot.y=bot.target.y*16+8;bot.target=null;}
     continue;
    }
-   const start={x:tx,y:ty};
    if(walkable(p,tx,ty)&&(Math.abs(bot.x-(tx*16+8))>.01||Math.abs(bot.y-(ty*16+8))>.01)){bot.target={x:tx,y:ty};bot.route=[];continue;}
-   if(danger.has(key(tx,ty))){
-    if(!bot.route.length)bot.route=findPath(p,start,n=>!danger.has(key(n.x,n.y)),{danger,allowDanger:true,maxSteps:7})??[];
-    bot.target=bot.route.shift()??null;bot.action='Escaping';continue;
-   }
    bot.route=[];
-   const useful=NEIGHBORS.some(([dx,dy])=>[2,3,4].includes(tileKind(p,tx+dx,ty+dy)))||foes.some(e=>blastCells(p,tx,ty).has(key(Math.floor(e.x/16),Math.floor(e.y/16))));
-   if(useful&&!bot.cooldown&&!nowBombs.some(b=>b.x===tx&&b.y===ty)) {
-    const proposed=new Set([...danger,...blastCells(p,tx,ty)]);
-    const escape=findPath(p,start,n=>!proposed.has(key(n.x,n.y)),{allowDanger:true,maxSteps:5});
-    const person=playerPosition(p),humanTile=key(Math.floor(person.x/16),Math.floor(person.y/16));
-    if(escape?.length&&!blastCells(p,tx,ty).has(humanTile)) {
-     try{spawnBomb(p,tx,ty);bot.bombsPlaced++;bot.cooldown=180;bot.route=escape;bot.target=bot.route.shift();bot.action='Bombing and escaping';record(bot,'Placed original-engine bomb');continue;}catch{}
-    }
-   }
-   const exit=findPath(p,start,n=>tileKind(p,n.x,n.y)===8,{danger});
-   if(p.RAM[0xd96]&&exit){if(exit.length)bot.target=exit[0];else {p.RAM[0x437]=1;record(bot,'Reached the exit; shared stage clear requested');}bot.action='Finding the exit';continue;}
+   const exit=findPath(p,start,n=>tileKind(p,n.x,n.y)===8,{danger:allDanger});
+   if(foes.length===0&&p.RAM[0xd96]&&exit){if(exit.length)bot.target=exit[0];else {p.RAM[0x437]=1;record(bot,'Reached the exit; shared stage clear requested');}bot.action='Finding the exit';continue;}
    
-   const objective=findPath(p,start,n=>NEIGHBORS.some(([dx,dy])=>[2,3,4].includes(tileKind(p,n.x+dx,n.y+dy)))||foes.some(e=>blastCells(p,n.x,n.y).has(key(Math.floor(e.x/16),Math.floor(e.y/16)))),{danger});
+   const hunting=findPath(p,start,n=>(n.x!==tx||n.y!==ty)&&attackZone.has(key(n.x,n.y)),{danger:allDanger});
+   const objective=hunting??findPath(p,start,n=>(n.x!==tx||n.y!==ty)&&NEIGHBORS.some(([dx,dy])=>[2,3,4].includes(tileKind(p,n.x+dx,n.y+dy))),{danger:allDanger});
    const route=objective?.length?objective:null;
-   bot.target=route?.[0]??null;bot.action=bot.target?'Clearing the stage':'Waiting safely';
+   bot.target=route?.[0]??null;bot.action=bot.target?(hunting?'Hunting monsters':'Clearing the stage'):'Waiting safely';
   }
  }
  // Extension actors use the ROM's loaded sprite patterns and the core's normal
@@ -223,7 +263,7 @@ export function createCompanions(p,{colorize}={}) {
    }
   }
  };
- return {state,add,update,restore(data){validateCompanionState(data);Object.assign(state,structuredClone(data));for(const b of state.bots)if(b.deathFrame===undefined)b.deathFrame=b.alive?null:DEATH_FRAMES;},reset(){state.bots=[];state.stage=null;state.steps=0;state.events=[];state.nextID=1;state.active=false;}};
+ return {state,add,update,restore(data){validateCompanionState(data);Object.assign(state,structuredClone(data));for(const [i,b]of state.bots.entries()){if(b.deathFrame===undefined)b.deathFrame=b.alive?null:DEATH_FRAMES;if(b.bombBank===undefined)b.bombBank=i;if(b.bombCapacity===undefined)b.bombCapacity=1;}},reset(){state.bots=[];state.stage=null;state.steps=0;state.events=[];state.nextID=1;state.active=false;}};
 }
 export function validRoute(route){return Array.isArray(route)&&route.length<=1024&&route.every(validTile);}
 export function validTile(t){return t&&Number.isInteger(t.x)&&t.x>=2&&t.x<=31&&Number.isInteger(t.y)&&t.y>=1&&t.y<=31&&(t.button===undefined||NEIGHBORS.some(n=>n[2]===t.button));}
@@ -232,6 +272,8 @@ export function validateCompanionState(data){
  if(!data||Object.keys(data).some(k=>!['bots','stage','nextID','steps','events','active'].includes(k))||!Array.isArray(data.bots)||data.bots.length>4||!integer(data.nextID)||!integer(data.steps)||typeof data.active!=='boolean'||(data.stage!==null&&!/^[0-7]:[0-7]$/.test(data.stage))||!Array.isArray(data.events)||data.events.length>40)throw new Error('Invalid teammate state in save.');
  for(const b of data.bots)if(!b||!Object.hasOwn(COLORS,b.color)||!integer(b.id)||!Number.isFinite(b.x)||!Number.isFinite(b.y)||b.x<32||b.x>520||b.y<16||b.y>520||typeof b.alive!=='boolean'||(b.target!==null&&!validTile(b.target))||!validRoute(b.route)||!integer(b.cooldown)||!integer(b.animation)||!integer(b.bombsPlaced)||!Number.isInteger(b.direction)||b.direction<0||b.direction>3||typeof b.action!=='string'||b.action.length>100)throw new Error('Invalid teammate state in save.');
  for(const b of data.bots)if(b.deathFrame!==undefined&&(b.alive?b.deathFrame!==null:!integer(b.deathFrame)||b.deathFrame>DEATH_FRAMES))throw new Error('Invalid teammate death animation in save.');
+ for(const b of data.bots)if((b.bombBank!==undefined&&(!integer(b.bombBank)||b.bombBank>3))||(b.bombCapacity!==undefined&&(!integer(b.bombCapacity)||b.bombCapacity<1||b.bombCapacity>5)))throw new Error('Invalid teammate bomb inventory in save.');
+ const banks=data.bots.filter(visibleBot).map(b=>b.bombBank).filter(v=>v!==undefined);if(new Set(banks).size!==banks.length)throw new Error('Overlapping teammate bomb inventories in save.');
  for(const e of data.events)if(!e||!integer(e.frame)||!integer(e.bot)||typeof e.text!=='string'||e.text.length>200)throw new Error('Invalid teammate event in save.');
  return data;
 }

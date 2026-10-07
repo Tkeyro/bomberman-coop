@@ -22,10 +22,10 @@ test('ROM loader, native keyboard menu, paused inventory and save import/export 
   for(let n=0;n<110;n++){clock+=50;nextFrame(clock);}
   const key=async code=>{window.listeners.keydown({code,preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));};
   assert.match(elements.get('menu-status').textContent,/1P - SOLO/);
-  await key('ArrowDown');assert.match(elements.get('menu-status').textContent,/CAMPAIGN/);
+  await key('ArrowDown');assert.match(elements.get('menu-status').textContent,/1-5P - NEW/);await key('ArrowDown');assert.match(elements.get('menu-status').textContent,/CAMPAIGN/);
   await key('ArrowDown');await key('Enter');assert.match(elements.get('load-status').textContent,/not connected/);assert.equal(elements.get('mode-label').textContent,'SOLO');
   await key('ArrowDown');await key('ArrowDown');await key('Enter');assert.match(elements.get('load-status').textContent,/No browser save/);
-  await key('ArrowDown');await key('ArrowDown');await key('Enter');assert.equal(document.activeElement,elements.get('game-canvas'));assert.equal(elements.get('start-btn').disabled,true);
+  await key('ArrowDown');await key('ArrowDown');await key('ArrowDown');await key('Enter');assert.equal(document.activeElement,elements.get('game-canvas'));assert.equal(elements.get('start-btn').disabled,true);
   for(let n=0;n<970;n++){clock+=50;nextFrame(clock);} // original intro + first active stage
   assert.equal(elements.get('menu-status').textContent,'');assert.equal(elements.get('player-count').textContent,'2P');
   let prevented=false;window.listeners.keydown({code:'ArrowRight',preventDefault(){prevented=true;}});assert.equal(prevented,true);elements.get('game-canvas').listeners.blur();
@@ -54,5 +54,8 @@ test('ROM loader, native keyboard menu, paused inventory and save import/export 
   await key('ArrowUp');assert.match(elements.get('menu-status').textContent,/LOAD SAVE/);await key('Enter');
   for(let n=0;n<200&&!elements.get('save-status').textContent.startsWith('Save loaded');n++)await new Promise(resolve=>setTimeout(resolve,10));
   assert.match(elements.get('save-status').textContent,/Save loaded/);assert.equal(elements.get('frame-count').textContent,quickFrame);assert.equal(elements.get('pause-btn').textContent,'Resume');
+  await elements.get('open-menu-btn').click();for(let n=0;n<110;n++){clock+=50;nextFrame(clock);}await key('ArrowDown');await key('ArrowLeft');assert.equal(elements.get('player-count-select').value,'1');await key('Enter');
+  for(let n=0;n<970&&!/NEW.*STAGE 1/.test(elements.get('mode-label').textContent);n++){clock+=50;nextFrame(clock);}assert.match(elements.get('mode-label').textContent,/NEW.*STAGE 1/);assert.equal(elements.get('player-count').textContent,'1P');await elements.get('admin-btn').click();assert.ok(elements.get('admin-map').children.length>400);await elements.get('admin-close').click();
+  await elements.get('open-menu-btn').click();for(let n=0;n<110;n++){clock+=50;nextFrame(clock);}await key('ArrowDown');await key('ArrowRight');await key('ArrowRight');await key('ArrowRight');await key('Enter');for(let n=0;n<970&&elements.get('player-count').textContent!=='5P';n++){clock+=50;nextFrame(clock);}assert.equal(elements.get('player-count-select').value,'5');assert.equal(elements.get('player-count').textContent,'5P','all four teammates spawn despite the guaranteed starting pickup');
  }finally{for(const [key,value]of originals){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}}
 });

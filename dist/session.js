@@ -22,6 +22,17 @@ export function colorizePlayer(rgb,index,color,fade=1,skin={r:252*fade,g:144*fad
 export function installColorSelector(pce) {
  let selected='original',battleColors=[];
  const convert=pce.ToPalettes.bind(pce);
+ const background=pce.MakeBGLine;
+ const headTiles=new Set([0x268,0x269,0x278,0x279,0x288,0x289]),headPalette=576;
+ pce.MakeBGLine=function(n){
+  background.call(this,n);if(n!==0||selected==='original')return;
+  const v=this.VDC[n],y=v.DrawBGLine;if(y<8||y>=32)return;
+  const left=((v.HDS+v.HSW)<<3)+v.DrawBGIndex,scroll=v.VDCRegister[7],row=(y>>3)*v.VScreenWidth;
+  for(let x=0;x<v.ScreenWidth;x++){
+   const tile=v.VRAM[row+(((scroll+x)>>3)&(v.VScreenWidth-1))],pixel=v.BGLine[left+x];
+   if((tile>>12)===11&&headTiles.has(tile&4095)&&pixel>=0xb0&&pixel<0xc0)v.BGLine[left+x]=headPalette+(pixel&15);
+  }
+ };
  function colorFor(address){
   const palette=address>>4;
   if(palette===28)return selected;
@@ -40,7 +51,10 @@ export function installColorSelector(pce) {
   const mono=themed.r*.299+themed.g*.587+themed.b*.114;
   Object.assign(pce.MonoPaletteData[address],{r:mono,g:mono,b:mono});
  };
- function refresh(){const saved=pce.VCEAddress;for(const base of [0x1c0,...(pce.RAM?.[0x84a]===8?[0x100,0x110,0x120,0x130,0x140]:[])])for(let i=0;i<16;i++){pce.VCEAddress=base+i;pce.ToPalettes();}pce.VCEAddress=saved;}
+ function refresh(){const saved=pce.VCEAddress;for(const base of [0x1c0,...(pce.RAM?.[0x84a]===8?[0x100,0x110,0x120,0x130,0x140]:[])])for(let i=0;i<16;i++){pce.VCEAddress=base+i;pce.ToPalettes();}pce.VCEAddress=saved;
+  const white=pce.Palette[0xb2],fade=Math.max((white>>3)&7,(white>>6)&7,white&7)/7,shades={2:1,6:6/7,7:4/7};
+  for(let i=0;i<16;i++){const raw=pce.Palette[0xb0+i],rgb={r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36},shade=shades[i];const themed=selected!=='original'&&shade!==undefined?Object.fromEntries(['r','g','b'].map((c,j)=>[c,Math.round(COLORS[selected][j]*shade*fade)])):rgb;pce.PaletteData[headPalette+i]=themed;const m=themed.r*.299+themed.g*.587+themed.b*.114;pce.MonoPaletteData[headPalette+i]={r:m,g:m,b:m};}
+ }
  return {select(color){if(!Object.hasOwn(COLORS,color))throw new Error('Unknown Bomberman color.');selected=color;if(battleColors.length)battleColors[0]=color;refresh();},setBattleColors(values){if(values.some(c=>!Object.hasOwn(COLORS,c)))throw new Error('Unknown battle color.');battleColors=[...values];refresh();},refresh,get selected(){return selected;},get battleColors(){return [...battleColors];}};
 }
 export const KEY_BINDINGS = {

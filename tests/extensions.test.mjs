@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {createMachine,frames} from '../scripts/headless.mjs';
 import {COLORS,colorizePlayer,installColorSelector} from '../dist/session.js';
-import {createCompanions,isCampaign,tileKind,enemies,spawnItem,spawnEnemy,validateCompanionState,ITEM_CATALOG,DEATH_FRAMES} from '../dist/campaign.js';
+import {createCompanions,isCampaign,tileKind,enemies,spawnItem,spawnEnemy,validateCompanionState,ITEM_CATALOG,DEATH_FRAMES,companionBombSlots} from '../dist/campaign.js';
 import {createBattleAI,launchSequence,battlePosition,activeBattle,validateBattleState} from '../dist/battle-ai.js';
 import {captureState,restoreState} from '../dist/save-state.js';
 const rom=process.env.BOMBERMAN_TEST_ROM,bytes=()=>fs.readFileSync(rom);
@@ -58,10 +58,39 @@ test('native items and living monster templates spawn, move and pick up',{skip:!
 });
 test('campaign AI clears blocks, kills native enemies and replays exactly after saving',{skip:!rom},()=>{
  const p=createMachine(bytes()),crew=createCompanions(p,{colorize:colorizePlayer});campaign(p);const human=[p.RAM[0x43d],p.RAM[0x43f]],bot=crew.add(4,1);bot.color='red';advance(p,crew,1500);
- assert.ok(bot.bombsPlaced>=5);assert.equal(tileKind(p,5,1),10);assert.ok(enemies(p).length<3);assert.equal(bot.alive,true);assert.deepEqual([p.RAM[0x43d],p.RAM[0x43f]],human);assert.ok(bot.x!==72||bot.y!==24);
+ assert.ok(bot.bombsPlaced>=5);assert.equal(tileKind(p,5,1),10);assert.equal(bot.alive,true);assert.deepEqual([p.RAM[0x43d],p.RAM[0x43f]],human);assert.ok(bot.x!==72||bot.y!==24);for(let n=0;n<1500&&enemies(p).length===3;n++)advance(p,crew,1);assert.ok(enemies(p).length<3,'safe bomb pursuit still kills native enemies');
  const extension=structuredClone(crew.state),tracker={...p._campaignTracker},save=captureState(p,{frame:4336,color:'original'});advance(p,crew,300);const expected={ram:[...p.RAM],pixels:Uint8ClampedArray.from(p.ImageData.data),bots:structuredClone(crew.state)};
  restoreState(p,save);crew.restore(extension);Object.assign(p._campaignTracker,tracker);advance(p,crew,300);assert.deepEqual(p.RAM,expected.ram);assert.deepEqual(p.ImageData.data,expected.pixels);assert.deepEqual(crew.state,expected.bots);
  const broken=structuredClone(extension);broken.bots[0].direction=99;assert.throws(()=>validateCompanionState(broken),/Invalid/);
+});
+test('AI reverses an interrupted step away from an approaching monster and refuses a trapped bomb',{skip:!rom},()=>{
+ const p=createMachine(bytes()),crew=createCompanions(p);campaign(p);const bot=crew.add(3,1),foe=enemies(p)[0];
+ for(let i=0;i<32;i++)if(i!==foe.slot)p.RAM[0xd98+i]=0;
+ for(let x=2;x<9;x++)p.RAM[0x44a+32+x]=10;
+ bot.x=60;bot.target={x:4,y:1};bot.cooldown=1000;
+ const positionEnemy=x=>{p.RAM[0xdd8+foe.slot]=x;p.RAM[0xdb8+foe.slot]=0;p.RAM[0xe18+foe.slot]=24;p.RAM[0xdf8+foe.slot]=0;};
+ for(let n=0;n<12;n++){positionEnemy(86-n*.5|0);const before=bot.x;crew.update();assert.ok(bot.x<=before,'never continue toward the approaching enemy');assert.equal(bot.alive,true);assert.equal(bot.action,'Avoiding monsters');}assert.ok(bot.x<60,'turn back before colliding');
+ assert.equal(bot.bombsPlaced,0);
+ // A monster closes the only escape: planting beside this block would be fatal.
+ bot.x=72;bot.y=24;bot.target=null;bot.route=[];bot.cooldown=0;positionEnemy(56);p.RAM[0x44a+32+5]=2;p.RAM[0x44a+64+4]=1;
+ for(let n=0;n<20;n++){crew.update();assert.equal(bot.bombsPlaced,0);assert.equal(bot.alive,true);assert.equal(bot.x,72);}
+});
+test('each bot has a separate bomb inventory that leaves human slots alone and uses native exploding bombs',{skip:!rom},()=>{
+ const p=createMachine(bytes()),crew=createCompanions(p);campaign(p);
+ for(let i=0;i<32;i++)p.RAM[0xd98+i]=0;for(let y=1;y<12;y++)for(let x=2;x<15;x++)p.RAM[0x44a+y*32+x]=10;
+ for(let slot=0;slot<10;slot++){p.RAM[0x84f+slot]=128;p.RAM[0x877+slot]=14;p.RAM[0x89f+slot]=11;p.RAM[0x8ef+slot]=150;p.RAM[0x917+slot]=255;}
+ const bots=[];for(const [x,y]of [[3,3],[7,3],[3,7],[7,7]]){p.RAM[0x44a+y*32+x+1]=2;bots.push(crew.add(x,y));}crew.update();
+ assert.deepEqual(bots.map(b=>b.bombsPlaced),[1,1,1,1]);assert.equal(new Set(bots.map(b=>b.bombBank)).size,4);for(const b of bots)assert.equal(companionBombSlots(b).filter(i=>p.RAM[0x84f+i]&128).length,1);assert.equal(p.RAM.slice(0x84f,0x859).filter(v=>v&128).length,10);assert.ok(p.RAM.slice(0x859,0x863).every(v=>v===0),'native enemy bomb slots remain reserved');
+ // Capacity upgrades affect only this actor's reserved inventory.
+ const b=bots[0];b.bombCapacity=2;b.cooldown=0;b.x=56;b.y=88;b.target=null;p.RAM[0x44a+5*32+4]=2;crew.update();assert.equal(b.bombsPlaced,2);assert.equal(companionBombSlots(b).filter(i=>p.RAM[0x84f+i]&128).length,2);assert.equal(bots[1].bombsPlaced,1);
+ // The reserved enemy bomb timer should tick once, not twice, per native frame.
+ p.RAM[0x84f+10]=128;p.RAM[0x877+10]=12;p.RAM[0x89f+10]=11;p.RAM[0x8ef+10]=150;p.RAM[0x917+10]=255;frames(p,1);assert.equal(p.RAM[0x8ef+10],149);
+ frames(p,190);assert.equal(tileKind(p,4,3),10,'a bot bomb beyond the human slots explodes through the original engine');assert.equal(p.RAM[0x84f+20],0);
+ const bad=structuredClone(crew.state);bad.bots[1].bombBank=bad.bots[0].bombBank;assert.throws(()=>validateCompanionState(bad),/Overlapping/);
+});
+test('bots keep pursuing living enemies and cannot use a blue pad with a stale cleared flag',{skip:!rom},()=>{
+ const p=createMachine(bytes()),crew=createCompanions(p);campaign(p);const bot=crew.add(3,1);bot.cooldown=1000;p.RAM[0x44a+32+3]=8;p.RAM[0xd96]=1;crew.update();assert.equal(p.RAM[0x437],0);assert.notEqual(bot.action,'Finding the exit');assert.ok(bot.target,'leave the current goal tile to find a usable attack position');
+ for(let i=0;i<32;i++)p.RAM[0xd98+i]=0;bot.target=null;bot.route=[];bot.x=56;bot.y=24;p.RAM[0xd96]=1;crew.update();assert.equal(p.RAM[0x437],1);
 });
 test('AI reaches an exposed blue exit and requests original shared stage clear',{skip:!rom},()=>{
  const p=createMachine(bytes()),crew=createCompanions(p,{colorize:colorizePlayer});campaign(p);const bot=crew.add(3,1);

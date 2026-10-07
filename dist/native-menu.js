@@ -2,13 +2,14 @@
 // No game artwork or glyph bitmaps are included in this module.
 export const MENU_OPTIONS = [
  {label:'1P - SOLO',mode:'solo'},
+ {label:'1-5P - NEW',mode:'new'},
  {label:'2-5P - CAMPAIGN',mode:'campaign'},
  {label:'2-5P - BATTLE (ONLINE)',mode:'online'},
  {label:'2-5P - BATTLE (A.I)',mode:'battle-ai'},
  {label:'LOAD SAVE',mode:'load'}
 ];
 export const TITLE_SEQUENCE = [{frames:180},{frames:8,button:'RUN'},{frames:120}];
-const FIRST_Y=138,ROW_HEIGHT=16;
+const FIRST_Y=130,ROW_HEIGHT=14;
 // Copyright glyphs are already embedded in the title's background tiles.
 function copyrightInk(v,x,y){
  const left=((v.HDS+v.HSW)<<3)+v.DrawBGIndex,worldX=x-left+v.VDCRegister[7];
@@ -28,8 +29,8 @@ export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=(
  function choose(){if(active)onSelect(MENU_OPTIONS[selected].mode,count);}
  function input(button){
   if(!active)return false;
-  if(button==='UP'||button==='DOWN'){selected=(selected+(button==='UP'?4:1))%5;announce();}
-  else if(button==='LEFT'||button==='RIGHT'){count=Math.min(5,Math.max(2,count+(button==='LEFT'?-1:1)));announce();}
+  if(button==='UP'||button==='DOWN'){selected=(selected+(button==='UP'?MENU_OPTIONS.length-1:1))%MENU_OPTIONS.length;if(MENU_OPTIONS[selected].mode!=='new')count=Math.max(2,count);announce();}
+  else if(button==='LEFT'||button==='RIGHT'){count=Math.min(5,Math.max(MENU_OPTIONS[selected].mode==='new'?1:2,count+(button==='LEFT'?-1:1)));announce();}
   else if(button==='RUN'||button==='SHOT1')choose();
   return true;
  }
@@ -56,7 +57,7 @@ export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=(
   }
   const row=Math.floor((y-FIRST_Y)/ROW_HEIGHT),glyphLine=(y-FIRST_Y)%ROW_HEIGHT;
   let text,palette=0xc000;
-  if(row>=0&&row<5&&glyphLine>=0&&glyphLine<8){text=MENU_OPTIONS[row].label;if(row===2||(row===4&&!hasSave))palette=0;}
+  if(row>=0&&row<MENU_OPTIONS.length&&glyphLine>=0&&glyphLine<8){text=MENU_OPTIONS[row].label;if(MENU_OPTIONS[row].mode==='online'||(MENU_OPTIONS[row].mode==='load'&&!hasSave))palette=0;}
   else if(y>=218&&y<226){text=`PLAYERS: ${count}  LEFT/RIGHT`;palette=0;}
   else return;
   const originalLine=v.BGLine.slice(),originalY=v.DrawBGLine;
@@ -64,7 +65,7 @@ export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=(
   try{
    for(let x=0;x<32;x++)v.VRAM[start+x]=0x220;
    for(let x=0;x<text.length;x++)v.VRAM[start+4+x]=palette+0x200+text.charCodeAt(x);
-   v.DrawBGLine=(originalY&~7)|((y-(row<5?FIRST_Y+row*ROW_HEIGHT:218))&7);
+   v.DrawBGLine=(originalY&~7)|((y-(row<MENU_OPTIONS.length?FIRST_Y+row*ROW_HEIGHT:218))&7);
    bg.call(this,n);
    // Native font's ink is index 1; its transparent pixels retain the landscape.
    const ink=(palette>>8)|1;
@@ -85,9 +86,9 @@ export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=(
   open(players=2){count=Math.min(5,Math.max(2,players));selected=0;active=true;rendering=true;departing=false;padHeld='';padFrames=0;announce();},
   leave(){active=false;departing=true;},
   close(){active=false;rendering=false;departing=false;},input,choose,
-  setCount(players){count=Math.min(5,Math.max(2,players));if(active)announce();},
+  setCount(players){count=Math.min(5,Math.max(MENU_OPTIONS[selected].mode==='new'?1:2,players));if(active)announce();},
   setSave(available){hasSave=Boolean(available);if(active)announce();},
-  pointer(y){if(!active||y<FIRST_Y||y>=FIRST_Y+5*ROW_HEIGHT)return;selected=Math.floor((y-FIRST_Y)/ROW_HEIGHT);announce();choose();},
+  pointer(y){if(!active||y<FIRST_Y||y>=FIRST_Y+MENU_OPTIONS.length*ROW_HEIGHT)return;selected=Math.floor((y-FIRST_Y)/ROW_HEIGHT);announce();choose();},
   get active(){return active;},get selected(){return selected;},get count(){return count;}
  };
 }

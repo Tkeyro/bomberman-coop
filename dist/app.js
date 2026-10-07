@@ -1,11 +1,12 @@
 import {PCE} from './vendor/pce.js';
 import {verifyROM,installColorSelector,colorizePlayer,COLORS,KEY_BINDINGS,traceWrites} from './session.js';
 import {captureState,validateState,restoreState,encodeSave,decodeSave,storeQuickSave,readQuickSave} from './save-state.js';
-import {createCompanions,validateCompanionState,ITEM_CATALOG,isCampaign,tileKind,playerPosition,enemies,spawnItem,spawnBomb,spawnEnemy,nearestFreeTile} from './campaign.js';
+import {createCompanions,validateCompanionState,ITEM_CATALOG,isCampaign,tileKind,playerPosition,enemies,spawnItem,spawnBomb,spawnEnemy,nearestFreeTile,companionBombSlots} from './campaign.js';
 import {createBattleAI,validateBattleState,launchSequence} from './battle-ai.js';
 import {installNativeMenu,TITLE_SEQUENCE} from './native-menu.js';
+import {createNewCampaign,validateNewCampaign} from './new-campaign.js';
 const $=id=>document.getElementById(id),canvas=$('game-canvas'),FRAME_MS=1000/59.8261;
-let machine,rom,colors,companions,battleAI,nativeMenu,running=false,muted=false,frame=0,mode='solo',count=2;
+let machine,rom,colors,companions,battleAI,nativeMenu,newCampaign,running=false,muted=false,frame=0,mode='solo',count=2;
 let lastTime=0,accumulator=0,pendingTrace,loadGeneration=0,boot=[],initialBots=0,started=false;
 let quickSave=null,busy=false,adminWasRunning=false,selectedTile=null,returnSave=null;
 const held=new Set();
@@ -26,11 +27,11 @@ async function chooseMode(nextMode,players){
  if(nextMode==='load'){if(quickSave)await loadProgress(quickSave);else message('No browser save yet. Import a .bmsave file or start a game and save progress.');return;}
  count=players;await launch(nextMode);
 }
-function setModeLabels(){const names={solo:'SOLO',campaign:'CAMPAIGN + AI','battle-ai':'BATTLE + AI'};$('mode-label').textContent=names[mode];$('player-count').textContent=mode==='battle-ai'?`${count}P`: `${1+companions.state.bots.filter(b=>b.alive).length}P`;$('coop-status').textContent=mode==='battle-ai'?'Computer opponents use the original multiplayer controllers. Press Enter at results to retry.':`Local AI teammates: ${companions.state.bots.filter(b=>b.alive).length}. They can be defeated. Remote multiplayer is still pending.`;}
+function setModeLabels(){const names={solo:'SOLO',new:newCampaign?.state.ready?`NEW · STAGE ${newCampaign.state.round}`:'NEW · PREPARING',campaign:'CAMPAIGN + AI','battle-ai':'BATTLE + AI'};$('mode-label').textContent=names[mode];$('player-count').textContent=mode==='battle-ai'?`${count}P`: `${1+companions.state.bots.filter(b=>b.alive).length}P`;$('coop-status').textContent=mode==='battle-ai'?'Computer opponents use the original multiplayer controllers. Press Enter at results to retry.':`${mode==='new'?'Clear all monsters, collect power-ups and uncover the blue exit. ':''}Local AI teammates: ${companions.state.bots.filter(b=>b.alive).length}. They can be defeated. Remote multiplayer is still pending.`;}
 function initialize(bytes){
- if(!machine){machine=new PCE();machine.CountryType=machine.CountryTypeTG16;machine.MultiTap=true;if(!machine.SetCanvas('game-canvas'))throw new Error('Your browser could not create the game screen.');colors=installColorSelector(machine);companions=createCompanions(machine,{colorize:colorizePlayer});battleAI=createBattleAI(machine);nativeMenu=installNativeMenu(machine,{onSelect:chooseMode,onChange:menuChanged,blockPads:()=>boot.length>0});}
+ if(!machine){machine=new PCE();machine.CountryType=machine.CountryTypeTG16;machine.MultiTap=true;if(!machine.SetCanvas('game-canvas'))throw new Error('Your browser could not create the game screen.');colors=installColorSelector(machine);companions=createCompanions(machine,{colorize:colorizePlayer});battleAI=createBattleAI(machine);newCampaign=createNewCampaign(machine,{onRound:()=>{companions.reset();initialBots=count-1;setModeLabels();}});nativeMenu=installNativeMenu(machine,{onSelect:chooseMode,onChange:menuChanged,blockPads:()=>boot.length>0});}
  nativeMenu.close();
- machine.SetROM(Array.from(bytes));machine.WaveVolume=muted?0:.6;companions.reset();battleAI.configure(2,false);machine._campaignTracker.frame=0;machine._campaignTracker.last=-100;colors.setBattleColors([]);colors.select($('color-select').value);
+ newCampaign.configure(false);machine.SetROM(Array.from(bytes));machine.WaveVolume=muted?0:.6;companions.reset();battleAI.configure(2,false);machine._campaignTracker.frame=0;machine._campaignTracker.last=-100;colors.setBattleColors([]);colors.select($('color-select').value);
  frame=0;boot=TITLE_SEQUENCE.map(a=>({...a}));initialBots=0;started=false;mode='solo';$('frame-count').textContent='0';$('start-btn').disabled=true;$('start-btn').textContent='Select';$('pause-btn').textContent='Resume';
  nativeMenu.prepare(Number($('player-count-select').value)||2);nativeMenu.setSave(quickSave);
  for(const id of ['pause-btn','reset-btn','mute-btn','fullscreen-btn','color-select','dump-btn','trace-btn','save-btn','export-save-btn','save-input','open-menu-btn','admin-btn'])$(id).disabled=false;
@@ -39,9 +40,9 @@ function initialize(bytes){
 }
 async function launch(nextMode){
  if(!rom||busy)return;await pause();finishTrace();nativeMenu.leave();returnSave=null;companions.reset();battleAI.configure(2,false);mode=nextMode;count=Number($('player-count-select').value)||2;
- initialBots=mode==='campaign'?count-1:0;battleAI.configure(count,mode==='battle-ai');
+ count=Math.max(mode==='new'?1:2,count);initialBots=mode==='campaign'||mode==='new'?count-1:0;battleAI.configure(Math.max(2,count),mode==='battle-ai');newCampaign.configure(mode==='new',count);
  if(mode==='battle-ai'){const variants=Object.keys(COLORS);colors.setBattleColors([colors.selected,...Array.from({length:count-1},()=>variants[Math.floor(Math.random()*variants.length)])]);}
- boot=launchSequence(mode,count).slice(3).map(action=>({...action}));started=true;$('start-btn').textContent='Resume';canvas.setAttribute('aria-label','Bomberman game screen. Arrows or WASD move, Space places bombs.');$('menu-status').textContent='';setModeLabels();message('Starting '+(mode==='battle-ai'?'Battle with AI opponents.':'the original campaign.'));await resume();
+ boot=launchSequence(mode,count).slice(3).map(action=>({...action}));started=true;$('start-btn').textContent='Resume';canvas.setAttribute('aria-label','Bomberman game screen. Arrows or WASD move, Space places bombs.');$('menu-status').textContent='';setModeLabels();message('Starting '+(mode==='battle-ai'?'Battle with AI opponents.':mode==='new'?'a new generated campaign.':'the original campaign.'));await resume();
 }
 async function openMenu(){if(!machine||busy||(!started&&!returnSave))return;await pause();finishTrace();if(started)returnSave=captureState(machine,sessionData());initialize(rom);updateMenu();message('Opening the main menu. Continue game returns to your current session; choosing a new game replaces it.');await resume();}
 $('rom-input').addEventListener('change',async event=>{
@@ -56,10 +57,11 @@ $('player-count-select').addEventListener('change',event=>nativeMenu.setCount(Nu
 $('color-select').addEventListener('change',event=>colors.select(event.target.value));
 $('mute-btn').addEventListener('click',()=>{muted=!muted;machine.WaveVolume=muted?0:.6;if(machine.WebAudioGainNode)machine.WebAudioGainNode.gain.value=machine.WaveVolume;$('mute-btn').textContent=muted?'Unmute':'Mute';$('mute-btn').setAttribute('aria-pressed',String(muted));});
 $('fullscreen-btn').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await $('game-canvas').requestFullscreen();}catch{message('Fullscreen is unavailable in this browser.');}});
-function sessionData(){return {frame,color:colors.selected,battleColors:colors.battleColors,mode,count,started,boot:structuredClone(boot),initialBots,companions:structuredClone(companions.state),battleAI:structuredClone(battleAI.state),tracker:{...machine._campaignTracker}};}
+function sessionData(){return {frame,color:colors.selected,battleColors:colors.battleColors,mode,count,started,boot:structuredClone(boot),initialBots,companions:structuredClone(companions.state),battleAI:structuredClone(battleAI.state),newCampaign:structuredClone(newCampaign.state),tracker:{...machine._campaignTracker}};}
 function validateSession(save){
  validateState(machine,save);const s=save.session;
- if(!Object.hasOwn(COLORS,s.color)||!Number.isSafeInteger(s.frame)||s.frame<0||!['solo','campaign','battle-ai'].includes(s.mode)||!Number.isInteger(s.count)||s.count<2||s.count>5||typeof s.started!=='boolean'||!Array.isArray(s.battleColors)||s.battleColors.length>5||s.battleColors.some(c=>!Object.hasOwn(COLORS,c))||!Array.isArray(s.boot)||s.boot.length>30||s.boot.some(a=>!a||!Number.isInteger(a.frames)||a.frames<1||a.frames>240||(a.button!==undefined&&!['RUN','DOWN'].includes(a.button)))||!Number.isInteger(s.initialBots)||s.initialBots<0||s.initialBots>4||!s.tracker||!Number.isSafeInteger(s.tracker.frame)||s.tracker.frame<0||!Number.isSafeInteger(s.tracker.last)||s.tracker.last>s.tracker.frame||s.tracker.last< -100)throw new Error('Invalid session data in save.');
+ if(!Object.hasOwn(COLORS,s.color)||!Number.isSafeInteger(s.frame)||s.frame<0||!['solo','new','campaign','battle-ai'].includes(s.mode)||!Number.isInteger(s.count)||s.count<(s.mode==='new'?1:2)||s.count>5||typeof s.started!=='boolean'||!Array.isArray(s.battleColors)||s.battleColors.length>5||s.battleColors.some(c=>!Object.hasOwn(COLORS,c))||!Array.isArray(s.boot)||s.boot.length>30||s.boot.some(a=>!a||!Number.isInteger(a.frames)||a.frames<1||a.frames>240||(a.button!==undefined&&!['RUN','DOWN'].includes(a.button)))||!Number.isInteger(s.initialBots)||s.initialBots<0||s.initialBots>4||!s.tracker||!Number.isSafeInteger(s.tracker.frame)||s.tracker.frame<0||!Number.isSafeInteger(s.tracker.last)||s.tracker.last>s.tracker.frame||s.tracker.last< -100)throw new Error('Invalid session data in save.');
+ if(s.newCampaign!==undefined)validateNewCampaign(s.newCampaign);else if(s.mode==='new')throw new Error('Missing NEW campaign state in save.');
  validateCompanionState(s.companions);validateBattleState(s.battleAI);return s;
 }
 async function saveProgress(exportFile=false){
@@ -67,7 +69,7 @@ async function saveProgress(exportFile=false){
  try{const blob=await encodeSave(returnSave??captureState(machine,sessionData()));if(exportFile){download(blob,'bomberman-'+new Date().toISOString().replace(/[:.]/g,'-')+'.bmsave');$('save-status').textContent='Save exported. Keep this file to continue on another computer.';}else{await storeQuickSave(blob);quickSave=blob;$('save-status').textContent='Progress saved in this browser. Export a backup before clearing browser data.';}}
  catch(error){$('save-status').textContent=error.message;}finally{busy=false;updateMenu();if(wasRunning)await resume();}
 }
-function applySession(save,s){nativeMenu.close();returnSave=null;restoreState(machine,save);colors.setBattleColors(s.battleColors);colors.select(s.color);$('color-select').value=s.color;companions.restore(s.companions);battleAI.restore(s.battleAI);Object.assign(machine._campaignTracker,s.tracker);frame=s.frame;mode=s.mode;count=s.count;started=s.started;boot=structuredClone(s.boot);initialBots=s.initialBots;$('player-count-select').value=String(count);releaseKeys();$('frame-count').textContent=String(frame);$('menu-status').textContent='';$('start-btn').textContent='Resume';$('pause-btn').textContent='Resume';$('start-btn').disabled=false;canvas.setAttribute('aria-label','Bomberman game screen. Arrows or WASD move, Space places bombs.');setModeLabels();}
+function applySession(save,s){nativeMenu.close();returnSave=null;restoreState(machine,save);colors.setBattleColors(s.battleColors);colors.select(s.color);$('color-select').value=s.color;companions.restore(s.companions);battleAI.restore(s.battleAI);if(s.newCampaign)newCampaign.restore(s.newCampaign);else newCampaign.configure(false);Object.assign(machine._campaignTracker,s.tracker);frame=s.frame;mode=s.mode;count=s.count;started=s.started;boot=structuredClone(s.boot);initialBots=s.initialBots;$('player-count-select').value=String(count);releaseKeys();$('frame-count').textContent=String(frame);$('menu-status').textContent='';$('start-btn').textContent='Resume';$('pause-btn').textContent='Resume';$('start-btn').disabled=false;canvas.setAttribute('aria-label','Bomberman game screen. Arrows or WASD move, Space places bombs.');setModeLabels();}
 async function loadProgress(blob){
  if(!rom||busy||!blob)return;await pause();finishTrace();busy=true;updateMenu();
  try{const save=await decodeSave(blob),s=validateSession(save);applySession(save,s);$('save-status').textContent='Save loaded. Press Resume to continue.';message('Your game is restored and paused.');}
@@ -84,7 +86,7 @@ function refreshAdmin(){
   const bot=companions.state.bots.find(b=>b.alive&&Math.floor(b.x/16)===x&&Math.floor(b.y/16)===y);tile.textContent=x===px&&y===py?'P':bot?'AI':kind===8?'E':kind===7?'＋':'';tile.title=`Tile ${x}, ${y}`;tile.setAttribute('aria-label',`Tile ${x}, ${y}, ${kind===10?'floor':'occupied'}`);tile.setAttribute('aria-pressed',String(selectedTile?.x===x&&selectedTile?.y===y));tile.addEventListener('click',()=>{selectedTile={x,y};refreshAdmin();});map.append(tile);
  }
  $('spawn-coordinate').textContent=selectedTile?`Selected tile: ${selectedTile.x}, ${selectedTile.y}`:'No empty floor is available.';
- $('team-list').textContent=companions.state.bots.map(b=>`${b.color==='original'?'White':b.color} #${b.id}: ${b.action} · ${b.bombsPlaced} bombs`).join('\n')||'No AI teammates yet.';
+ $('team-list').textContent=companions.state.bots.map(b=>`${b.color==='original'?'White':b.color} #${b.id}: ${b.action} · ${companionBombSlots(b).filter(i=>machine.RAM[0x84f+i]&128).length}/${b.bombCapacity} bombs in use · ${b.bombsPlaced} placed`).join('\n')||'No AI teammates yet.';
  const grid=$('enemy-grid');grid.replaceChildren();const seen=new Set();
  for(const enemy of enemies(machine)){if(enemy.type>=23||seen.has(enemy.type))continue;seen.add(enemy.type);const button=document.createElement('button');button.textContent=enemy.type===2?'Ballom':`Monster type ${enemy.type}`;button.addEventListener('click',()=>adminSpawn(()=>spawnEnemy(machine,enemy.slot,selectedTile.x,selectedTile.y)));grid.append(button);}
  if(!seen.size)grid.textContent='No living monster templates in this stage.';
@@ -108,7 +110,7 @@ window.addEventListener('keyup',event=>{if(!held.delete(event.code))return;const
 canvas.addEventListener('click',async event=>{if(!nativeMenu?.active||boot.length||busy)return;unlockAudio();if(!running)await resume();canvas.focus({preventScroll:true});const rect=canvas.getBoundingClientRect();nativeMenu.pointer((event.clientY-rect.top)*canvas.height/rect.height);});
 canvas.addEventListener('blur',releaseKeys);window.addEventListener('blur',()=>{if(running)pause();});document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)pause();});
 function step(){
- if(boot.length){releaseKeys();if(boot[0].button)machine['SetButton'+boot[0].button](0);}else if(nativeMenu.active)releaseKeys();else{companions.update();battleAI.update();}
+ if(boot.length){releaseKeys();if(boot[0].button)machine['SetButton'+boot[0].button](0);}else if(nativeMenu.active)releaseKeys();else{newCampaign.update();companions.update();battleAI.update();}
  colors.refresh();machine.Run();frame++;
  if(boot.length&&--boot[0].frames===0){boot.shift();releaseKeys();if(!boot.length){if(!started){nativeMenu.open(Number($('player-count-select').value)||2);updateMenu();message('Main menu ready. Up/Down select, Left/Right change players, Enter starts.');}else message('Game ready. Click the game screen to focus controls.');}}
  if(initialBots&&isCampaign(machine)&&!(machine.RAM[0x43a]&7)&&!machine.RAM[0x437]){
