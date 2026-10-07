@@ -7,11 +7,13 @@ export async function verifyROM(bytes) {
   return hex;
 }
 export const COLORS = {original:[252,252,252],black:[56,56,64],blue:[0,108,252],green:[36,180,0],red:[252,0,0],violet:[198,72,252],orange:[252,144,0],yellow:[252,216,0]};
-// Nonwhite variants have a themed helmet/body, skin-colored limbs and pink ends.
+// Nonwhite variants have a themed helmet/body and skin-colored limbs. Red alone
+// uses the original red Battle actor's green hands/feet; other ends stay pink.
 const SUIT_SHADES={2:.71,3:1,4:.86,8:.86,9:.71,10:.57,15:1};
 const LIMB_SHADES={11:.86,13:.57,14:1};
 export function colorizePlayer(rgb,index,color,fade=1,skin={r:252*fade,g:144*fade,b:0}) {
  if(color==='original')return {...rgb};
+ if(color==='red'&&index===5)return {r:0,g:Math.round(180*fade),b:Math.round(36*fade)};
  if(Object.hasOwn(LIMB_SHADES,index))return Object.fromEntries(['r','g','b'].map(channel=>[channel,Math.round(skin[channel]*LIMB_SHADES[index])]));
  if(!Object.hasOwn(SUIT_SHADES,index))return {...rgb};
  const base=COLORS[color];

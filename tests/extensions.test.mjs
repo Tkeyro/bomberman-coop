@@ -7,21 +7,22 @@ import {captureState,restoreState} from '../dist/save-state.js';
 const rom=process.env.BOMBERMAN_TEST_ROM,bytes=()=>fs.readFileSync(rom);
 function campaign(p){for(const a of launchSequence('solo'))frames(p,a.frames,a.button?[[0,a.button]]:[]);frames(p,2520);}
 function advance(p,crew,n){for(let i=0;i<n;i++){crew.update();p.Run();}}
-test('colored helmets and bodies match, limbs use face skin, and pink ends/white stay native',()=>{
+test('colored helmets and bodies match, limbs use face skin, and only red has green ends',()=>{
  const rgb={r:252,g:252,b:252},pink={r:252,g:72,b:252},skin={r:252,g:144,b:0};
  for(const color of Object.keys(COLORS)){if(color==='original')continue;
   assert.deepEqual(colorizePlayer(rgb,3,color),colorizePlayer(rgb,15,color));assert.deepEqual(colorizePlayer(rgb,4,color),colorizePlayer(rgb,8,color));assert.deepEqual(colorizePlayer(rgb,2,color),colorizePlayer(rgb,9,color));
   assert.deepEqual(colorizePlayer(rgb,14,color),skin);assert.deepEqual(colorizePlayer(rgb,11,color),{r:217,g:124,b:0});assert.deepEqual(colorizePlayer(rgb,13,color),{r:144,g:82,b:0});
-  assert.deepEqual(colorizePlayer(pink,5,color),pink);assert.deepEqual(colorizePlayer(rgb,6,color),rgb);
+  assert.deepEqual(colorizePlayer(pink,5,color),color==='red'?{r:0,g:180,b:36}:pink);assert.deepEqual(colorizePlayer(rgb,6,color),rgb);
   assert.deepEqual(colorizePlayer(skin,7,color),skin);
  }
  for(let index=0;index<16;index++)assert.deepEqual(colorizePlayer(pink,index,'original'),pink);
+ assert.deepEqual(colorizePlayer(pink,5,'red',.5),{r:0,g:90,b:18});assert.deepEqual(colorizePlayer(pink,5,'red',0),{r:0,g:0,b:0});
 });
 test('intro rear pose 792 is recolored without altering game palette or RAM',{skip:!rom},()=>{
  const p=createMachine(bytes());const selector=installColorSelector(p);selector.select('orange');for(const a of launchSequence('solo'))frames(p,a.frames,a.button?[[0,a.button]]:[]);frames(p,720);
  assert.equal(p.VDC[0].SATB[2],792);const ram=[...p.RAM],palette=[...p.Palette];selector.refresh();assert.deepEqual(p.RAM,ram);assert.deepEqual(p.Palette,palette);
  assert.ok(p.PaletteData[0x1cf].r>p.PaletteData[0x1cf].g);
- for(const color of Object.keys(COLORS)){selector.select(color);for(const index of [5,6,7]){const raw=p.Palette[0x1c0+index];assert.deepEqual(p.PaletteData[0x1c0+index],{r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36});}if(color!=='original')assert.deepEqual(p.PaletteData[0x1ce],p.PaletteData[0x1c7]);}
+ for(const color of Object.keys(COLORS)){selector.select(color);for(const index of [5,6,7]){const raw=p.Palette[0x1c0+index];assert.deepEqual(p.PaletteData[0x1c0+index],color==='red'&&index===5?{r:0,g:180,b:36}:{r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36});}if(color!=='original')assert.deepEqual(p.PaletteData[0x1ce],p.PaletteData[0x1c7]);}
 });
 test('defeated AI plays every native death pose, stays still, then disappears; saves replay mid-animation',{skip:!rom},()=>{
  const p=createMachine(bytes()),crew=createCompanions(p,{colorize:colorizePlayer});campaign(p);const bot=crew.add(4,1);bot.color='original';
@@ -101,7 +102,7 @@ test('AI reaches an exposed blue exit and requests original shared stage clear',
 test('original Battle boots 2–5 actors; AI independently moves and places native bombs',{skip:!rom},()=>{
  for(const count of [2,5]){
   const p=createMachine(bytes()),ai=createBattleAI(p),colors=installColorSelector(p),variants=['black','original','orange','yellow','red'];colors.select('black');colors.setBattleColors(variants.slice(0,count));ai.configure(count,true);for(const a of launchSequence('battle-ai',count))frames(p,a.frames,a.button?[[0,a.button]]:[]);assert.equal(activeBattle(p),true);assert.equal(p.RAM[0x4a],count);colors.refresh();
-  for(let port=0;port<count;port++){const base=0x100+port*16;if(variants[port]==='original'){assert.deepEqual(p.PaletteData[base+14],{r:252,g:252,b:252});}else{assert.deepEqual(p.PaletteData[base+14],p.PaletteData[0x107]);assert.deepEqual(p.PaletteData[base+3],p.PaletteData[base+15]);}assert.deepEqual(p.PaletteData[base+5],p.PaletteData[0x105]);}
+  for(let port=0;port<count;port++){const base=0x100+port*16;if(variants[port]==='original'){assert.deepEqual(p.PaletteData[base+14],{r:252,g:252,b:252});}else{assert.deepEqual(p.PaletteData[base+14],p.PaletteData[0x107]);assert.deepEqual(p.PaletteData[base+3],p.PaletteData[base+15]);}assert.deepEqual(p.PaletteData[base+5],variants[port]==='red'?{r:0,g:180,b:36}:p.PaletteData[0x105]);}
   const human=battlePosition(p,0),before=Array.from({length:count-1},(_,i)=>battlePosition(p,i+1));let bombSeen=false;
   for(let n=0;n<400;n++){ai.update();p.Run();if(p.RAM.slice(0x84f,0x877).some(v=>v&128))bombSeen=true;}
   assert.deepEqual(battlePosition(p,0),human);assert.ok(before.some((pos,i)=>JSON.stringify(pos)!==JSON.stringify(battlePosition(p,i+1))));assert.ok(ai.state.bombsPlaced>0);assert.equal(bombSeen,true);
@@ -115,7 +116,7 @@ test('spawned AI remains solid while the native player blinks and cannot cross b
  spawnItem(p,6,2,1);let hiddenHuman=0,solidBot=0;const draw=p.MakeSpriteLine;
  p.MakeSpriteLine=function(n){draw.call(this,n);if(n!==0)return;const sp=this.VDC[0].SPLine;if(sp.some(dot=>dot.data&&dot.no<2&&dot.palette!==448)){if(sp.some(dot=>dot.data&&dot.no===64))hiddenHuman++;}if(sp.some(dot=>dot.data&&dot.no===64))solidBot++;};
  frames(p,45);assert.ok(hiddenHuman>0,'AI must render during native player blinking');assert.ok(solidBot>100);assert.equal(isCampaign(p),true);assert.ok(p.ImageData.data.every((v,i)=>i%4!==3||v===255),'rendered sprites remain opaque');
- bot.color='black';frames(p,1);assert.deepEqual(p.PaletteData[515],{r:56,g:56,b:64});assert.deepEqual(p.PaletteData[527],p.PaletteData[515]);assert.deepEqual(p.PaletteData[526],{r:252,g:144,b:0});assert.deepEqual(p.PaletteData[517],{r:252,g:0,b:180});bot.color='original';
+ bot.color='black';frames(p,1);assert.deepEqual(p.PaletteData[515],{r:56,g:56,b:64});assert.deepEqual(p.PaletteData[527],p.PaletteData[515]);assert.deepEqual(p.PaletteData[526],{r:252,g:144,b:0});assert.deepEqual(p.PaletteData[517],{r:252,g:0,b:180});bot.color='red';frames(p,1);assert.deepEqual(p.PaletteData[517],{r:0,g:180,b:36});assert.deepEqual(p.PaletteData[526],{r:252,g:144,b:0});bot.color='original';
  // Reuse this actor with a stale diagonal destination across a solid block.
  bot.x=56;bot.y=24;bot.target={x:4,y:2};bot.cooldown=1000;const solid=0x44a+32+4,goal=0x44a+64+4;p.RAM[solid]=(p.RAM[solid]&224)|2;p.RAM[goal]=(p.RAM[goal]&224)|10;
  for(let n=0;n<20;n++){crew.update();p.Run();assert.ok(bot.x+5<64,'feet must stop before the block');assert.equal(tileKind(p,4,1),2);}

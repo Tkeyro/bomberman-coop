@@ -21,10 +21,14 @@ export function createNewCampaign(p,{onRound=()=>{},getFocus=()=>playerPosition(
  const tracker=installCampaignTracker(p),set=p.Set,run=p.Run,cpu=p.CPURun,get=p.Get;
  function advance(){
   if(state.transition)return state.transition.kind==='advance';
-  if((p.RAM[0x43a]&7)||!p.RAM[0xd96]||enemies(p).length)return false;
+  if((p.RAM[0x43a]&7)||!p.RAM[0xd96]||enemies(p).length||p._levelObjective?.canExit()===false)return false;
   state.pending=true;state.transition={kind:'advance',phase:'clearing',targetRound:Math.min(1000000,state.round+1)};return true;
  }
- function dying(){state.pending=false;state.transition={kind:'retry',phase:'dying',targetRound:state.round};}
+ function dying(){
+  // Watched games retry indefinitely, including a native clock expiry.
+  if(p._spectator?.enabled)p.RAM[0x438]=Math.max(1,p.RAM[0x438]);
+  state.pending=false;state.transition={kind:'retry',phase:'dying',targetRound:state.round};
+ }
  function camera(){const pos=getFocus(),x=Math.max(8,Math.min(state.width*16-256,pos.x-120)),y=Math.max(0,Math.min(state.height*16-208,pos.y-104));return [Math.floor(x)&255,Math.floor(x)>>8,Math.floor(y)&255,Math.floor(y)>>8];}
  p.Set=function(address,value){
   if(state.enabled&&state.ready&&isCampaign(this)){

@@ -31,6 +31,12 @@ test('trace records actual player-region writes and restores the setter', () => 
   assert.equal(result.records.length,1); assert.equal(result.records[0].offset,0x43d);
   assert.equal(result.dropped,1); assert.equal(p.Set,setter); assert.equal(p.RAM[0x43d],42);
 });
+test('red hands and feet use native green and fade while other ends and palette memory stay unchanged',()=>{
+ const p=createMachine(new Uint8Array(262144));p.Palette[0x1c5]=61;p.Palette[0x1cf]=511;p.Palette[0x1c7]=312;p.VCEAddress=0x132;
+ const selector=installColorSelector(p),palette=[...p.Palette];selector.select('red');assert.deepEqual(p.PaletteData[0x1c5],{r:0,g:180,b:36});assert.deepEqual(p.PaletteData[0x1ce],{r:252,g:144,b:0});assert.deepEqual(p.Palette,palette);assert.equal(p.VCEAddress,0x132);
+ for(const color of ['black','blue','green','violet','orange','yellow','original']){selector.select(color);assert.deepEqual(p.PaletteData[0x1c5],{r:252,g:0,b:180});}
+ p.Palette[0x1cf]=219;selector.select('red');assert.deepEqual(p.PaletteData[0x1c5],{r:0,g:77,b:15});p.Palette[0x1cf]=0;selector.refresh();assert.deepEqual(p.PaletteData[0x1c5],{r:0,g:0,b:0});
+});
 const file = process.env.BOMBERMAN_TEST_ROM;
 test('lives icon follows every selected helmet color while its face, HUD text and game memory stay native',{skip:!file},()=>{
  const p=createMachine(fs.readFileSync(file)),selector=installColorSelector(p);

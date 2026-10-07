@@ -46,3 +46,9 @@ test('a defeated watched team animates during native death music, then reloads w
  for(let i=0;i<70;i++)step();const expected={ram:[...p.RAM],pixels:Uint8ClampedArray.from(p.ImageData.data),bots:structuredClone(crew.state)};restoreState(p,save);mode.restore(generator);crew.restore(bots);watch.restore(spectator);Object.assign(p._campaignTracker,tracker);for(let i=0;i<70;i++)step();assert.deepEqual(p.RAM,expected.ram);assert.deepEqual(p.ImageData.data,expected.pixels);assert.deepEqual(crew.state,expected.bots);
  let elapsed=0;for(;elapsed<700&&mode.state.transition;elapsed++){step();observer.tick();}assert.equal(mode.state.transition,null);assert.equal(mode.state.round,1);assert.equal(watch.state.finished,false);assert.equal(crew.state.bots.length,0,'onRound resets the team for the configured spawn count');assert.ok(enemies(p).length>0);assert.ok(botPixels>100);assert.equal(nativePixels,0);assert.ok(observer.events.music.includes(0x2a));assert.equal(observer.events.banners,1);assert.ok(observer.events.black>=8);
 });
+test('an independently triggered native defeat retries watched NEW even with no native lives left',{skip:!rom},()=>{
+ const {p,crew,mode,step}=setup(true),observer=observe(p);crew.add(4,1);
+ p.RAM[0x438]=0;p.RAM[0x43a]|=1;mode.update();
+ assert.equal(mode.state.transition.kind,'retry');assert.equal(p.RAM[0x438],1,'the hidden controller has a life for the native retry loader');
+ complete(mode,step,observer);assert.equal(mode.state.round,1);assert.equal(p.RAM[0x43a]&7,0);assert.ok(enemies(p).length>0);assert.ok(observer.events.music.includes(0x2a));
+});

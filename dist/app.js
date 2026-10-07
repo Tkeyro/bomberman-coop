@@ -1,16 +1,22 @@
 import {PCE} from './vendor/pce.js';
 import {verifyROM,installColorSelector,colorizePlayer,COLORS,KEY_BINDINGS,traceWrites} from './session.js';
 import {captureState,validateState,restoreState,encodeSave,decodeSave,storeQuickSave,readQuickSave} from './save-state.js';
-import {createCompanions,validateCompanionState,ITEM_CATALOG,isCampaign,tileKind,playerPosition,enemies,spawnItem,spawnBomb,spawnEnemy,nearestFreeTile,companionBombSlots} from './campaign.js';
+import {createCompanions,validateCompanionState,ITEM_CATALOG,isCampaign,tileKind,playerPosition,spawnItem,spawnBomb,spawnEnemy,nearestFreeTile,companionBombSlots} from './campaign.js';
 import {createBattleAI,validateBattleState,launchSequence} from './battle-ai.js';
 import {installNativeMenu,TITLE_SEQUENCE,watchBots} from './native-menu.js';
 import {createNewCampaign,validateNewCampaign} from './new-campaign.js';
 import {createSpectator,validateSpectatorState} from './spectator.js';
 import {createIntroSkip,validateIntroSkip} from './intro.js';
+import {createLevelObjective,validateLevelObjective} from './level-objective.js';
+import {enemyCatalog,createEnemyCard} from './enemy-icons.js';
+import {createPowerupHUD,validatePowerupHUD,createPowerupBadge} from './powerup-hud.js';
 const $=id=>document.getElementById(id),canvas=$('game-canvas'),FRAME_MS=1000/59.8261;
-let machine,rom,colors,companions,battleAI,nativeMenu,newCampaign,spectator,introSkip,running=false,muted=false,frame=0,mode='solo',count=2;
+let machine,rom,colors,companions,battleAI,nativeMenu,newCampaign,spectator,introSkip,levelObjective,powerupHUD,running=false,muted=false,frame=0,mode='solo',count=2;
 let lastTime=0,accumulator=0,pendingTrace,loadGeneration=0,boot=[],initialBots=0,started=false;
 let quickSave=null,busy=false,adminWasRunning=false,selectedTile=null,returnSave=null;
+let powerupSignature='';
+let selectedSpawn=null;
+const spawnButtons=new Map();
 const held=new Set();
 const consumed=new Set();
 function message(text){$('load-status').textContent=text;}
@@ -32,16 +38,26 @@ async function chooseMode(nextMode,players){
  count=players;await launch(nextMode);
 }
 function setModeLabels(){
- const watch=watchBots(count),alive=companions.state.bots.filter(b=>b.alive).length,transition=newCampaign?.state.transition;
+ const watch=watchBots(count),alive=companions.state.bots.filter(b=>b.alive).length,transition=newCampaign?.state.transition,watchRetry=spectator?.state.transition;
  const names={solo:'SOLO',new:newCampaign?.state.ready||transition?`NEW · STAGE ${transition?.targetRound??newCampaign.state.round}${transition?transition.kind==='retry'?' · RESTARTING':' · NEXT ROUND':''}`:'NEW · PREPARING',campaign:'CAMPAIGN + AI','battle-ai':'BATTLE + AI'};
  $('mode-label').textContent=(watch?'WATCH · ':'')+names[mode];$('player-count').textContent=mode==='battle-ai'?watch?`${watch} AI`:`${count}P`:watch?`${alive} AI`:`${1+alive}P`;
- const progress=mode==='new'&&transition?transition.kind==='retry'?'Restarting this round after the death music, fades and stage card.':'Round complete. The next round starts after the clear music, fades and stage card.':spectator.state.finished?'The team was defeated; choose a new game from Main menu.':'Bots fight monsters, clear blocks and seek the exit.';
- $('coop-status').textContent=watch?(mode==='battle-ai'?`Watching ${watch} AI opponents. Press Enter at results to retry.`:`Watching ${alive} AI Bombermen. The camera follows a living bot. ${progress}`):mode==='battle-ai'?'Computer opponents use the original multiplayer controllers. Press Enter at results to retry.':`${mode==='new'?'Clear all monsters, collect power-ups and uncover the blue exit. ':''}Local AI teammates: ${alive}. They can be defeated. Remote multiplayer is still pending.`;
+ const reviving=!alive&&companions.state.bots.some(b=>!b.alive&&b.extraLives);
+ const progress=watchRetry||(mode==='new'&&transition?.kind==='retry')?'Restarting this round after the death music, fades and stage card.':mode==='new'&&transition?'Round complete. The next round starts after the clear music, fades and stage card.':reviving?'Waiting for a safe tile to use an extra life.':'Bots fight monsters, break the glowing wall and collect its item before using the exit.';
+ $('coop-status').textContent=watch?(mode==='battle-ai'?`Watching ${watch} AI opponents. Press Enter at results to retry.`:`Watching ${alive} AI Bombermen. The camera follows a living bot. ${progress}`):mode==='battle-ai'?'Computer opponents use the original multiplayer controllers. Press Enter at results to retry.':`Clear all monsters, then break the glowing wall and collect its item before using the blue exit. Local AI teammates: ${alive}. They can be defeated. Remote multiplayer is still pending.`;
+ refreshPowerups();
+}
+function refreshPowerups(){
+ const visible=Boolean(powerupHUD?.state.enabled&&started&&!returnSave&&!watchBots(count)&&mode!=='battle-ai'&&isCampaign(machine)&&!(machine.RAM[0x43a]&7)&&!machine.RAM[0x437]&&!newCampaign.state.transition);
+ $('powerup-panel').hidden=!visible;if(!visible){powerupSignature='';return;}
+ const signature=powerupHUD.state.counts.join(',')+':'+machine.RAM[0x84a];if(signature===powerupSignature)return;powerupSignature=signature;
+ const grid=$('powerup-inventory');grid.replaceChildren();
+ for(const [type,total]of powerupHUD.state.counts.entries())if(total)grid.append(createPowerupBadge(machine,type,total,{document}));
+ if(!grid.children.length)grid.textContent='Collect a power-up to add its icon and total here.';
 }
 function initialize(bytes){
- if(!machine){machine=new PCE();machine.CountryType=machine.CountryTypeTG16;machine.MultiTap=true;if(!machine.SetCanvas('game-canvas'))throw new Error('Your browser could not create the game screen.');colors=installColorSelector(machine);companions=createCompanions(machine,{colorize:colorizePlayer,getHuman:()=>spectator?.state.enabled?null:playerPosition(machine)});battleAI=createBattleAI(machine);newCampaign=createNewCampaign(machine,{getFocus:()=>spectator?.state.enabled?spectator.focus():playerPosition(machine),onRound:()=>{companions.reset();if(spectator?.state.enabled)spectator.configure(true);initialBots=watchBots(count)||count-1;setModeLabels();}});spectator=createSpectator(machine,{getBots:()=>companions.state.bots});nativeMenu=installNativeMenu(machine,{onSelect:chooseMode,onChange:menuChanged,blockPads:()=>boot.length>0});}
+ if(!machine){machine=new PCE();machine.CountryType=machine.CountryTypeTG16;machine.MultiTap=true;if(!machine.SetCanvas('game-canvas'))throw new Error('Your browser could not create the game screen.');colors=installColorSelector(machine);companions=createCompanions(machine,{colorize:colorizePlayer,getHuman:()=>spectator?.state.enabled?null:playerPosition(machine)});battleAI=createBattleAI(machine);newCampaign=createNewCampaign(machine,{getFocus:()=>spectator?.state.enabled?spectator.focus():playerPosition(machine),onRound:()=>{companions.reset();if(spectator?.state.enabled)spectator.configure(true);initialBots=watchBots(count)||count-1;setModeLabels();}});spectator=createSpectator(machine,{getBots:()=>companions.state.bots,onRetry:()=>{companions.reset();initialBots=watchBots(count);setModeLabels();}});levelObjective=createLevelObjective(machine,{getActors:()=>[...(spectator?.state.enabled?[]:[playerPosition(machine)]),...companions.state.bots.filter(b=>b.alive)],getFocus:()=>spectator?.state.enabled?spectator.focus():playerPosition(machine)});powerupHUD=createPowerupHUD(machine,{getHuman:()=>spectator?.state.enabled?null:playerPosition(machine)});nativeMenu=installNativeMenu(machine,{onSelect:chooseMode,onChange:menuChanged,blockPads:()=>boot.length>0});}
  introSkip??=createIntroSkip(machine);introSkip.configure(false);consumed.clear();nativeMenu.close();
- spectator.configure(false);newCampaign.configure(false);machine.SetROM(Array.from(bytes));machine.WaveVolume=muted?0:.6;companions.reset();battleAI.configure(2,false);machine._campaignTracker.frame=0;machine._campaignTracker.last=-100;colors.setBattleColors([]);colors.select($('color-select').value);
+ spectator.configure(false);newCampaign.configure(false);levelObjective.configure(false);powerupHUD.configure(false);powerupSignature="";machine.SetROM(Array.from(bytes));machine.WaveVolume=muted?0:.6;companions.reset();battleAI.configure(2,false);machine._campaignTracker.frame=0;machine._campaignTracker.last=-100;colors.setBattleColors([]);colors.select($('color-select').value);
  frame=0;boot=TITLE_SEQUENCE.map(a=>({...a}));initialBots=0;started=false;mode='solo';$('frame-count').textContent='0';$('start-btn').disabled=true;$('start-btn').textContent='Select';$('pause-btn').textContent='Resume';
  nativeMenu.prepare(Number($('player-count-select').value));nativeMenu.setSave(quickSave);
  for(const id of ['pause-btn','reset-btn','mute-btn','fullscreen-btn','color-select','dump-btn','trace-btn','save-btn','export-save-btn','save-input','open-menu-btn','admin-btn'])$(id).disabled=false;
@@ -50,7 +66,7 @@ function initialize(bytes){
 }
 async function launch(nextMode){
  if(!rom||busy)return;await pause();finishTrace();nativeMenu.leave();returnSave=null;companions.reset();battleAI.configure(2,false);mode=nextMode;count=Number($('player-count-select').value);
- if(count>0)count=Math.max(mode==='new'?1:2,count);const players=watchBots(count)||count;initialBots=mode==='battle-ai'?0:watchBots(count)||((mode==='campaign'||mode==='new')?count-1:0);battleAI.configure(Math.max(2,players),mode==='battle-ai',Boolean(watchBots(count)));spectator.configure(Boolean(watchBots(count)));newCampaign.configure(mode==='new',players);
+ if(count>0)count=Math.max(mode==='new'?1:2,count);const players=watchBots(count)||count;initialBots=mode==='battle-ai'?0:watchBots(count)||((mode==='campaign'||mode==='new')?count-1:0);battleAI.configure(Math.max(2,players),mode==='battle-ai',Boolean(watchBots(count)));spectator.configure(Boolean(watchBots(count)));newCampaign.configure(mode==='new',players);levelObjective.configure(mode!=='battle-ai');powerupHUD.configure(mode!=='battle-ai');powerupSignature='';
  if(mode==='battle-ai'){const variants=Object.keys(COLORS);colors.setBattleColors([colors.selected,...Array.from({length:players-1},()=>variants[Math.floor(Math.random()*variants.length)])]);}
  boot=launchSequence(mode,players).slice(3).map(action=>({...action}));introSkip.configure(mode!=='battle-ai');started=true;$('start-btn').textContent='Resume';canvas.setAttribute('aria-label',watchBots(count)?`Bomberman AI spectator screen. ${watchBots(count)} bots play automatically. Space skips the opening cutscene.`:'Bomberman game screen. Arrows or WASD move, Space skips the opening cutscene or places bombs. B or X detonates remote bombs after collecting Remote Control.');$('menu-status').textContent='';setModeLabels();message('Starting '+(watchBots(count)?'AI only — watch.':mode==='battle-ai'?'Battle with AI opponents.':mode==='new'?'a new generated campaign.':'the original campaign.'));await resume();
 }
@@ -67,13 +83,14 @@ $('player-count-select').addEventListener('change',event=>nativeMenu.setCount(Nu
 $('color-select').addEventListener('change',event=>colors.select(event.target.value));
 $('mute-btn').addEventListener('click',()=>{muted=!muted;machine.WaveVolume=muted?0:.6;if(machine.WebAudioGainNode)machine.WebAudioGainNode.gain.value=machine.WaveVolume;$('mute-btn').textContent=muted?'Unmute':'Mute';$('mute-btn').setAttribute('aria-pressed',String(muted));});
 $('fullscreen-btn').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await $('game-canvas').requestFullscreen();}catch{message('Fullscreen is unavailable in this browser.');}});
-function sessionData(){return {frame,color:colors.selected,battleColors:colors.battleColors,mode,count,started,boot:structuredClone(boot),initialBots,openingIntro:{...introSkip.state},companions:structuredClone(companions.state),battleAI:structuredClone(battleAI.state),newCampaign:structuredClone(newCampaign.state),spectator:structuredClone(spectator.state),tracker:{...machine._campaignTracker}};}
+function sessionData(){return {frame,color:colors.selected,battleColors:colors.battleColors,mode,count,started,boot:structuredClone(boot),initialBots,openingIntro:{...introSkip.state},companions:structuredClone(companions.state),battleAI:structuredClone(battleAI.state),newCampaign:structuredClone(newCampaign.state),spectator:structuredClone(spectator.state),levelObjective:structuredClone(levelObjective.state),powerupHUD:structuredClone(powerupHUD.state),tracker:{...machine._campaignTracker}};}
 function validateSession(save){
  validateState(machine,save);const s=save.session;
  if(!Object.hasOwn(COLORS,s.color)||!Number.isSafeInteger(s.frame)||s.frame<0||!['solo','new','campaign','battle-ai'].includes(s.mode)||!Number.isInteger(s.count)||(s.count>0&&s.count<(s.mode==='new'?1:2))||s.count< -4||s.count>5||typeof s.started!=='boolean'||!Array.isArray(s.battleColors)||s.battleColors.length>5||s.battleColors.some(c=>!Object.hasOwn(COLORS,c))||!Array.isArray(s.boot)||s.boot.length>30||s.boot.some(a=>!a||!Number.isInteger(a.frames)||a.frames<1||a.frames>240||(a.button!==undefined&&!['RUN','DOWN'].includes(a.button)))||!Number.isInteger(s.initialBots)||s.initialBots<0||s.initialBots>4||!s.tracker||!Number.isSafeInteger(s.tracker.frame)||s.tracker.frame<0||!Number.isSafeInteger(s.tracker.last)||s.tracker.last>s.tracker.frame||s.tracker.last< -100)throw new Error('Invalid session data in save.');
  if(s.openingIntro!==undefined){validateIntroSkip(s.openingIntro);if(s.openingIntro.pending&&(!s.started||s.mode==='battle-ai'))throw new Error('Inconsistent opening intro state in save.');}
  if(s.newCampaign!==undefined)validateNewCampaign(s.newCampaign);else if(s.mode==='new')throw new Error('Missing NEW campaign state in save.');
  if(s.spectator!==undefined)validateSpectatorState(s.spectator);if(watchBots(s.count)&&(!s.spectator?.enabled||s.battleAI?.spectator!==true))throw new Error('Missing AI spectator state in save.');if(s.spectator&&s.spectator.enabled!==Boolean(watchBots(s.count)))throw new Error('Inconsistent spectator state in save.');
+ if(s.levelObjective!==undefined)validateLevelObjective(s.levelObjective);if(s.powerupHUD!==undefined)validatePowerupHUD(s.powerupHUD);
  validateCompanionState(s.companions);validateBattleState(s.battleAI);return s;
 }
 async function saveProgress(exportFile=false){
@@ -81,7 +98,7 @@ async function saveProgress(exportFile=false){
  try{const blob=await encodeSave(returnSave??captureState(machine,sessionData()));if(exportFile){download(blob,'bomberman-'+new Date().toISOString().replace(/[:.]/g,'-')+'.bmsave');$('save-status').textContent='Save exported. Keep this file to continue on another computer.';}else{await storeQuickSave(blob);quickSave=blob;$('save-status').textContent='Progress saved in this browser. Export a backup before clearing browser data.';}}
  catch(error){$('save-status').textContent=error.message;}finally{busy=false;updateMenu();if(wasRunning)await resume();}
 }
-function applySession(save,s){nativeMenu.close();returnSave=null;restoreState(machine,save);colors.setBattleColors(s.battleColors);colors.select(s.color);$('color-select').value=s.color;companions.restore(s.companions);battleAI.restore(s.battleAI);if(s.newCampaign)newCampaign.restore(s.newCampaign);else newCampaign.configure(false);if(s.spectator)spectator.restore(s.spectator);else spectator.configure(false);Object.assign(machine._campaignTracker,s.tracker);frame=s.frame;mode=s.mode;count=s.count===0?-4:s.count;started=s.started;boot=structuredClone(s.boot);initialBots=s.initialBots;if(s.openingIntro)introSkip.restore(s.openingIntro);else introSkip.configure(started&&mode!=='battle-ai'&&s.tracker.last<0);consumed.clear();$('player-count-select').value=String(count);releaseKeys();$('frame-count').textContent=String(frame);$('menu-status').textContent='';$('start-btn').textContent='Resume';$('pause-btn').textContent='Resume';$('start-btn').disabled=false;canvas.setAttribute('aria-label',watchBots(count)?`Bomberman AI spectator screen. ${watchBots(count)} bots play automatically. Space skips the opening cutscene.`:'Bomberman game screen. Arrows or WASD move, Space skips the opening cutscene or places bombs. B or X detonates remote bombs after collecting Remote Control.');setModeLabels();}
+function applySession(save,s){nativeMenu.close();returnSave=null;restoreState(machine,save);colors.setBattleColors(s.battleColors);colors.select(s.color);$('color-select').value=s.color;companions.restore(s.companions);battleAI.restore(s.battleAI);if(s.newCampaign)newCampaign.restore(s.newCampaign);else newCampaign.configure(false);if(s.spectator)spectator.restore(s.spectator);else spectator.configure(false);if(s.levelObjective)levelObjective.restore(s.levelObjective);else levelObjective.configure(s.started&&s.mode!=='battle-ai');if(s.powerupHUD)powerupHUD.restore(s.powerupHUD);else powerupHUD.configure(s.started&&s.mode!=='battle-ai');powerupSignature='';Object.assign(machine._campaignTracker,s.tracker);frame=s.frame;mode=s.mode;count=s.count===0?-4:s.count;started=s.started;boot=structuredClone(s.boot);initialBots=s.initialBots;if(s.openingIntro)introSkip.restore(s.openingIntro);else introSkip.configure(started&&mode!=='battle-ai'&&s.tracker.last<0);consumed.clear();$('player-count-select').value=String(count);releaseKeys();$('frame-count').textContent=String(frame);$('menu-status').textContent='';$('start-btn').textContent='Resume';$('pause-btn').textContent='Resume';$('start-btn').disabled=false;canvas.setAttribute('aria-label',watchBots(count)?`Bomberman AI spectator screen. ${watchBots(count)} bots play automatically. Space skips the opening cutscene.`:'Bomberman game screen. Arrows or WASD move, Space skips the opening cutscene or places bombs. B or X detonates remote bombs after collecting Remote Control.');setModeLabels();}
 async function loadProgress(blob){
  if(!rom||busy||!blob)return;await pause();finishTrace();busy=true;updateMenu();
  try{const save=await decodeSave(blob),s=validateSession(save);applySession(save,s);$('save-status').textContent='Save loaded. Press Resume to continue.';message('Your game is restored and paused.');}
@@ -95,22 +112,34 @@ function refreshAdmin(){
  const person=playerPosition(machine),px=Math.floor(person.x/16),py=Math.floor(person.y/16);
  for(let y=1;y<=height;y++)for(let x=2;x<=width;x++){
   const tile=document.createElement('button'),kind=tileKind(machine,x,y);tile.type='button';tile.disabled=kind!==10;tile.className='map-tile '+(kind===1?'wall':[2,3,4,5].includes(kind)?'block':kind===10?'floor':'occupied');
-  const bot=companions.state.bots.find(b=>b.alive&&Math.floor(b.x/16)===x&&Math.floor(b.y/16)===y);tile.textContent=x===px&&y===py?'P':bot?'AI':kind===8?'E':kind===7?'＋':'';tile.title=`Tile ${x}, ${y}`;tile.setAttribute('aria-label',`Tile ${x}, ${y}, ${kind===10?'floor':'occupied'}`);tile.setAttribute('aria-pressed',String(selectedTile?.x===x&&selectedTile?.y===y));tile.addEventListener('click',()=>{selectedTile={x,y};refreshAdmin();});map.append(tile);
+  const bot=companions.state.bots.find(b=>b.alive&&Math.floor(b.x/16)===x&&Math.floor(b.y/16)===y);tile.textContent=x===px&&y===py?'P':bot?'AI':kind===8?'E':kind===7?'＋':'';tile.title=`Tile ${x}, ${y}`;tile.setAttribute('aria-label',`Tile ${x}, ${y}, ${kind===10?'floor':'occupied'}`);tile.setAttribute('aria-pressed',String(selectedTile?.x===x&&selectedTile?.y===y));tile.addEventListener('click',()=>{selectedTile={x,y};if(selectedSpawn)adminSpawn(()=>selectedSpawn.place({x,y}));else refreshAdmin();});map.append(tile);
  }
  $('spawn-coordinate').textContent=selectedTile?`Selected tile: ${selectedTile.x}, ${selectedTile.y}`:'No empty floor is available.';
  $('team-list').textContent=companions.state.bots.map(b=>`${b.color==='original'?'White':b.color} #${b.id}: ${b.action} · ${companionBombSlots(b).filter(i=>machine.RAM[0x84f+i]&128).length}/${b.bombCapacity} bombs in use · ${b.bombsPlaced} placed · fire ${b.fireRange} · ${b.pickupsCollected} pickups${b.fireproof?` · vest ${Math.ceil(b.fireproof/60)}s`:""}${b.extraLives?` · ${b.extraLives} extra lives`:""}`).join('\n')||'No AI teammates yet.';
- const grid=$('enemy-grid');grid.replaceChildren();const seen=new Set();
- for(const enemy of enemies(machine)){if(enemy.type>=23||seen.has(enemy.type))continue;seen.add(enemy.type);const button=document.createElement('button');button.textContent=enemy.type===2?'Ballom':`Monster type ${enemy.type}`;button.addEventListener('click',()=>adminSpawn(()=>spawnEnemy(machine,enemy.slot,selectedTile.x,selectedTile.y)));grid.append(button);}
- if(!seen.size)grid.textContent='No living monster templates in this stage.';
+ const grid=$('enemy-grid');grid.replaceChildren();
+ for(const key of [...spawnButtons.keys()])if(key.startsWith('enemy:'))spawnButtons.delete(key);
+ for(const entry of enemyCatalog(machine)){
+  const key=`enemy:${entry.type}`,button=createEnemyCard(machine,entry,{document,onSpawn:()=>selectSpawn(key,entry.name,tile=>spawnEnemy(machine,entry.templateSlot,tile.x,tile.y))});spawnButtons.set(key,button);grid.append(button);
+ }
+ updateSpawnSelection();
 }
+function updateSpawnSelection(){
+ for(const [key,button]of spawnButtons)button.setAttribute('aria-pressed',String(selectedSpawn?.key===key));
+ $('spawn-deselect').disabled=!selectedSpawn;
+ $('spawn-tool').textContent=selectedSpawn?`${selectedSpawn.label} selected. Click empty tiles to place copies. Click the selected tool again or Deselect to stop.`:'Select an item, monster or teammate, then click empty tiles to place it.';
+}
+function selectSpawn(key,label,place){selectedSpawn=selectedSpawn?.key===key?null:{key,label,place};refreshAdmin();$('admin-status').textContent=selectedSpawn?`${label} selected. Click any empty tile to place it; selection stays active.`:'Placement tool deselected.';}
+function clearSpawn(){selectedSpawn=null;updateSpawnSelection();}
 function adminSpawn(action){try{if(!selectedTile)throw new Error('Select an empty floor tile.');const result=action();$('admin-status').textContent=result?.notice??(result?.color?`AI Bomberman added (${result.color==='original'?'white':result.color}). Resume to let it play.`:'Spawned. Resume to see the original engine update.');if(tileKind(machine,selectedTile.x,selectedTile.y)!==10)selectedTile=null;refreshAdmin();setModeLabels();}catch(error){$('admin-status').textContent=error.message;}}
-for(const item of ITEM_CATALOG){const button=document.createElement('button');button.textContent=item.name;if(item.type===6){const detail=document.createElement('span');detail.textContent='Bomb blasts only · ~60s';button.append(detail);button.title='Collect to gain temporary bomb-blast protection. Enemies can still hurt you.';}button.addEventListener('click',()=>adminSpawn(()=>{spawnItem(machine,item.type,selectedTile.x,selectedTile.y);return {notice:item.type===6?'Vest placed. Resume and collect it for about 60 seconds of bomb-blast protection. Enemies can still hurt you.':'Item placed. Resume and walk over it to collect its power.'};}));$('item-grid').append(button);}
-$('spawn-bot').addEventListener('click',()=>adminSpawn(()=>companions.add(selectedTile.x,selectedTile.y)));$('spawn-bomb').addEventListener('click',()=>adminSpawn(()=>spawnBomb(machine,selectedTile.x,selectedTile.y)));
+for(const item of ITEM_CATALOG){const key=`item:${item.type}`,button=document.createElement('button');button.textContent=item.name;button.type='button';button.setAttribute('aria-pressed','false');spawnButtons.set(key,button);if(item.type===6){const detail=document.createElement('span');detail.textContent='Bomb blasts only · ~60s';button.append(detail);button.title='Collect to gain temporary bomb-blast protection. Enemies can still hurt you.';}button.addEventListener('click',()=>selectSpawn(key,item.name,tile=>{spawnItem(machine,item.type,tile.x,tile.y);return {notice:item.type===6?'Vest placed. Click more empty tiles to place copies. Resume and collect it for about 60 seconds of bomb-blast protection. Enemies can still hurt you.':'Item placed. Click more empty tiles to place copies, or deselect the item to stop.'};}));$('item-grid').append(button);}
+spawnButtons.set('bot',$('spawn-bot'));spawnButtons.set('bomb',$('spawn-bomb'));
+$('spawn-bot').addEventListener('click',()=>selectSpawn('bot','AI Bomberman',tile=>companions.add(tile.x,tile.y)));$('spawn-bomb').addEventListener('click',()=>selectSpawn('bomb','Bomb',tile=>spawnBomb(machine,tile.x,tile.y)));
+$('spawn-deselect').addEventListener('click',()=>{clearSpawn();$('admin-status').textContent='Placement tool deselected.';});
 async function openAdmin(){
  if(!machine||busy)return;if(!isCampaign(machine)||(machine.RAM[0x43a]&7)||machine.RAM[0x437]){message('The admin inventory opens during an active campaign stage.');return;}
- adminWasRunning=running;await pause();const person=playerPosition(machine);try{selectedTile=nearestFreeTile(machine,{x:Math.floor(person.x/16),y:Math.floor(person.y/16)});}catch{selectedTile=null;}$('admin-status').textContent='Game paused. Select an empty floor tile and choose what to spawn.';refreshAdmin();$('admin-dialog').showModal();
+ adminWasRunning=running;await pause();selectedSpawn=null;const person=playerPosition(machine);try{selectedTile=nearestFreeTile(machine,{x:Math.floor(person.x/16),y:Math.floor(person.y/16)});}catch{selectedTile=null;}$('admin-status').textContent='Game paused. Select a placement tool, then click empty tiles to place copies.';refreshAdmin();$('admin-dialog').showModal();
 }
-async function closeAdmin(){if(!$('admin-dialog').open)return;$('admin-dialog').close();if(adminWasRunning)await resume();}
+async function closeAdmin(){if(!$('admin-dialog').open)return;$('admin-dialog').close();clearSpawn();if(adminWasRunning)await resume();}
 $('admin-btn').addEventListener('click',openAdmin);$('admin-close').addEventListener('click',closeAdmin);$('admin-dialog').addEventListener('cancel',event=>{event.preventDefault();closeAdmin();});
 window.addEventListener('keydown',event=>{
  if(event.code==='F2'&&machine){event.preventDefault();if($('admin-dialog').open)closeAdmin();else openAdmin();return;}
@@ -126,18 +155,18 @@ window.addEventListener('keyup',event=>{if(consumed.delete(event.code)){event.pr
 canvas.addEventListener('click',async event=>{if(!nativeMenu?.active||boot.length||busy)return;unlockAudio();if(!running)await resume();canvas.focus({preventScroll:true});const rect=canvas.getBoundingClientRect();nativeMenu.pointer((event.clientY-rect.top)*canvas.height/rect.height);});
 canvas.addEventListener('blur',()=>{releaseKeys();consumed.clear();});window.addEventListener('blur',()=>{consumed.clear();if(running)pause();});document.addEventListener('visibilitychange',()=>{if(document.hidden&&running){consumed.clear();pause();}});
 function step(){
- if(boot.length){releaseKeys();if(boot[0].button)machine['SetButton'+boot[0].button](0);}else if(nativeMenu.active)releaseKeys();else{newCampaign.update();spectator.update();companions.update();battleAI.update();}
- if(watchBots(count)&&mode==='new'&&companions.state.bots.length&&companions.state.bots.every(b=>!b.alive&&!b.extraLives)&&newCampaign.retry()){
-  setModeLabels();message(`The AI team was defeated. Retrying NEW stage ${newCampaign.state.round} with ${watchBots(count)} bots.`);
+ if(boot.length){releaseKeys();if(boot[0].button)machine['SetButton'+boot[0].button](0);}else if(nativeMenu.active)releaseKeys();else{powerupHUD.update();levelObjective.update();newCampaign.update();spectator.update();companions.update();battleAI.update();}
+ if(watchBots(count)&&mode!=='battle-ai'&&companions.state.bots.length&&companions.state.bots.every(b=>!b.alive&&!b.extraLives)&&(mode==='new'?newCampaign.retry():spectator.retry())){
+  const stage=mode==='new'?`NEW stage ${newCampaign.state.round}`:`stage ${machine.RAM[0x84a]+1}-${machine.RAM[0x84b]+1}`;
+  setModeLabels();message(`The AI team was defeated. Retrying ${stage} with ${watchBots(count)} bots.`);
  }
  const opening=introSkip.state.pending;if(!boot.length&&!nativeMenu.active)introSkip.update();
- colors.refresh();machine.Run();frame++;
+ colors.refresh();machine.Run();frame++;refreshPowerups();
  if(opening&&!introSkip.state.pending)message('Game ready. Space places bombs; B or X detonates them after collecting Remote Control.');
  if(boot.length&&--boot[0].frames===0){boot.shift();releaseKeys();if(!boot.length){if(!started){nativeMenu.open(Number($('player-count-select').value));updateMenu();message('Main menu ready. Up/Down select, Left/Right change players, Enter starts.');}else message(introSkip.state.pending?introSkip.state.requested?'Skipping the opening cutscene…':'Opening cutscene. Press Space to skip.':'Game ready. Click the game screen to focus controls.');}}
  if(initialBots&&isCampaign(machine)&&!(machine.RAM[0x43a]&7)&&!machine.RAM[0x437]){
   const person=watchBots(count)?{x:40,y:24}:playerPosition(machine),blocked=watchBots(count)?new Set():new Set([`${Math.floor(person.x/16)},${Math.floor(person.y/16)}`]);for(let n=0;n<initialBots;n++){try{const tile=nearestFreeTile(machine,{x:Math.floor(person.x/16),y:Math.floor(person.y/16)},blocked);companions.add(tile.x,tile.y);blocked.add(`${tile.x},${tile.y}`);}catch(error){message(error.message);break;}}initialBots=0;setModeLabels();
  }
- if(watchBots(count)&&mode!=='new'&&spectator.state.finished&&running){pause();setModeLabels();message('The AI team was defeated. Choose a new game from Main menu.');}
  if(pendingTrace&&frame>=pendingTrace.start+120)finishTrace();if(frame%60===0)setModeLabels();
 }
 function tick(now){if(running){accumulator+=Math.min(now-lastTime,FRAME_MS*3);try{let steps=0;while(accumulator>=FRAME_MS&&steps++<3){step();accumulator-=FRAME_MS;}$('frame-count').textContent=String(frame);}catch(error){pause();message('Emulation stopped: '+error.message);}}lastTime=now;requestAnimationFrame(tick);}

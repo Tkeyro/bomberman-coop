@@ -8,7 +8,7 @@ Proposed starting rules: shared stage objectives; each player owns their bomb li
 
 ## Current checkpoint
 
-v0.3.5 has independent local AI campaign actors and upgrades, native bomb/enemy/item spawn integration, larger generated maps, native NEW transition sequences, exact-position saves, full suit colors, watching 1–4 bots and native Battle AI. This is a playable sandbox; remote human co-op remains pending. Extension AI uses separate planner/movement state and the original sprite compositor. Native enemy targeting of extension actors, cooperative life rules, bosses and remote controller routing remain research tasks. Headless and mocked DOM validation does not replace live browser QA.
+v0.3.6 has independent local AI campaign actors and upgrades, native bomb/enemy/item spawn integration, larger generated maps, native campaign watch restarts, a required final pickup, admin enemy previews, exact-position saves, full suit colors, watching 1–4 bots and native Battle AI. This is a playable sandbox; remote human co-op remains pending. Extension AI uses separate planner/movement state and the original sprite compositor. Native enemy targeting of extension actors, cooperative life rules, bosses and remote controller routing remain research tasks. Headless and mocked DOM validation does not replace live browser QA.
 
 ## Independent online cameras
 
