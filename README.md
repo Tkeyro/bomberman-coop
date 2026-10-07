@@ -2,6 +2,8 @@
 
 Browser extension for **Bomberman (1990), TurboGrafx-16, USA**. Public source: [Tkeyro/bomberman-coop](https://github.com/Tkeyro/bomberman-coop). Each player supplies the same verified game file locally.
 
+**v0.4.1 makes color selection visible above the game and inside the online lobby.** Click one of eight named colors before loading the ROM or while choosing your lobby settings. A lobby color change updates the roster and clears readiness. Online colors stay fixed after starting; this UI patch preserves the v0.4.0 online/save protocol.
+
 **v0.4.0 adds online campaign and Battle lobbies, shared campaign upgrades, cooperative AI, a world picker and fresh-level online save recovery.** It also removes the living-template requirement for all 23 regular enemy types and rearranges the HUD with smaller inventory icons and a completely recolored lives head. Campaign companions and remote humans use independent extension actors with the original ROM models and native bombs, collisions and enemy damage. They are additional campaign characters implemented by this extension rather than extra native campaign controller ports.
 
 ## Play

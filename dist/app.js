@@ -23,6 +23,35 @@ let powerupSignature='';
 let sharedPowerups,worldStart,onlineCampaign,onlineRoom,onlinePhase=null,onlineMode='campaign',pendingCheckpoint=null,networkRoster=[],onlineSequence=0,onlineFrames=[],onlineMasks=[],onlineAcks=new Set(),onlineSending=false,lastInput=-1,roomBusy=false;
 const onlineGame=()=>mode.startsWith('online-');
 const localActorID=()=>networkRoster.findIndex(p=>p.id===onlineRoom?.playerId)+1;
+const COLOR_CHOICES={original:['White','#fff'],black:['Black','#222'],orange:['Orange','#ed951b'],yellow:['Yellow','#f2da32'],blue:['Blue','#327cdc'],green:['Green','#4bb54e'],red:['Red','#db4141'],violet:['Violet','#9962dc']};
+const colorButtons=[];
+const colorLocked=()=>onlineRoom?.room?.status==='playing'||onlineGame()&&started&&onlinePhase!=='lobby';
+function renderColorPickers(){
+ const selected=colors?.selected??$('color-select').value,locked=colorLocked();$('color-select').value=selected;
+ for(const {button,color}of colorButtons){button.setAttribute('aria-pressed',String(color===selected));button.disabled=roomBusy||locked;}
+ $('color-select').disabled=roomBusy||locked;
+ const label=COLOR_CHOICES[selected]?.[0]??'White';
+ for(const id of ['color-current','room-color-current'])if($(id).textContent!==label+' selected')$(id).textContent=label+' selected';
+ $('color-notice').textContent=locked?'Online colors are fixed for this game. Choose a different color in your next lobby.':roomBusy?'Updating your lobby…':'Click a named color. Your selection also applies to the opening cutscene.';
+ $('room-color-notice').textContent=locked?'Colors are fixed once the game starts.':roomBusy?'Updating your lobby…':'Click a color, then mark Ready. Changing color clears your Ready status.';
+}
+function setSelectedColor(color){
+ if(!Object.hasOwn(COLOR_CHOICES,color))return;
+ if(colors&&colors.selected!==color)colors.select(color);
+ $('color-select').value=color;renderColorPickers();
+}
+async function chooseColor(color){
+ if(!Object.hasOwn(COLOR_CHOICES,color)||roomBusy||colorLocked()){renderColorPickers();return;}
+ if(onlineRoom?.room?.status==='lobby')await roomAction(async()=>{await onlineRoom.update({color,ready:false});setSelectedColor(color);});
+ else setSelectedColor(color);
+}
+function installColorPickers(){
+ for(const id of ['color-options','room-color-options'])for(const [color,[label,hex]]of Object.entries(COLOR_CHOICES)){
+  const button=document.createElement('button'),swatch=document.createElement('span'),name=document.createElement('span');
+  button.type='button';button.className='color-option';button.setAttribute('data-color',color);if(button.dataset)button.dataset.color=color;button.setAttribute('aria-label','Choose '+label+' Bomberman');swatch.className='color-swatch';swatch.style.background=hex;swatch.setAttribute('aria-hidden','true');name.textContent=label;button.append(swatch,name);button.addEventListener('click',()=>chooseColor(color));$(id).append(button);colorButtons.push({button,color,group:id});
+ }
+ if(!Object.hasOwn(COLOR_CHOICES,$('color-select').value))$('color-select').value='original';renderColorPickers();
+}
 let selectedSpawn=null;
 const spawnButtons=new Map();
 const held=new Set();
@@ -59,8 +88,9 @@ function checkpointFromSave(save){
 function checkpointHeader(c){if(!c)return null;const {world,area,players,savedAt,revision,mode}=c;return {world,area,players,savedAt,revision,mode};}
 function renderRoom(room,info={}){
  const list=$('room-list');list.replaceChildren();
- for(const player of room?.players??[]){const row=document.createElement('div'),swatch=document.createElement('span'),name=document.createElement('strong'),state=document.createElement('span');row.className='room-player';swatch.className='room-color';swatch.style.background={original:'#fff',black:'#222',orange:'#ed951b',yellow:'#f2da32',blue:'#327cdc',green:'#4bb54e',red:'#db4141',violet:'#9962dc'}[player.color];swatch.title=player.color==='original'?'White':player.color;name.textContent=player.name+(player.id===room.hostId?' · host':'');state.textContent=player.connected===false?'Disconnected':player.ready?'Ready':'Choosing';row.append(swatch,name,state);list.append(row);}
+ for(const player of room?.players??[]){const own=player.id===onlineRoom?.playerId,row=document.createElement('div'),swatch=document.createElement(own?'button':'span'),name=document.createElement('strong'),state=document.createElement('span');row.className='room-player';swatch.className='room-color';swatch.style.background=COLOR_CHOICES[player.color]?.[1];swatch.title=player.color==='original'?'White':player.color;if(own){swatch.type='button';swatch.setAttribute('aria-label','Change your Bomberman color');swatch.addEventListener('click',()=>{const option=colorButtons.find(b=>b.color===player.color&&b.group==='room-color-options');$('room-color-options').scrollIntoView?.({block:'nearest'});(option?.button??$('room-color-options')).focus();});}name.textContent=player.name+(player.id===room.hostId?' · host':'');state.textContent=player.connected===false?'Disconnected':player.ready?'Ready':'Choosing';row.append(swatch,name,state);list.append(row);}
  const mine=room?.players.find(p=>p.id===onlineRoom?.playerId),host=Boolean(info.isHost);
+ if(mine)setSelectedColor(mine.color);else renderColorPickers();
  $('room-ready').disabled=!room||room.status!=='lobby';$('room-ready').textContent=mine?.ready?'Not ready':'Ready';$('room-copy').disabled=!room;$('room-leave').disabled=!room;$('create-room').disabled=Boolean(room);$('join-room').disabled=Boolean(room);$('room-save-input').disabled=!room||!host||room.mode!=='campaign'||room.status!=='lobby';
  $('room-start').disabled=!room||!host||room.status!=='lobby'||!info.connected||room.players.some(p=>!p.ready||p.connected===false)||room.players.length<2;
  if(room){$('room-code').value=room.code;$('online-status').textContent=`Room ${room.code} · ${room.players.length}/${room.slots} players`;$('room-status').textContent=info.connected?'Everyone is connected. Mark ready, then the host can start.':'Connecting players… Mark ready after choosing your color.';}
@@ -76,7 +106,7 @@ async function openLobby(){
  await pause();roomConnection();onlinePhase='lobby';$('online-room-dialog').showModal();$('room-title').textContent=onlineMode==='battle'?'Online battle lobby':'Online campaign lobby';renderRoom(onlineRoom.room,{isHost:onlineRoom.host,connected:onlineRoom.connected()});
  if(!onlineRoom.room){try{const code=new URL(globalThis.location?.href??'https://local.test/').searchParams.get('room');if(code)$('room-code').value=code;}catch{}}
 }
-async function roomAction(action){if(roomBusy)return;roomBusy=true;$('create-room').disabled=true;$('join-room').disabled=true;try{await action();}catch(error){roomError(error);}finally{roomBusy=false;$('create-room').disabled=Boolean(onlineRoom?.room);$('join-room').disabled=Boolean(onlineRoom?.room);}}
+async function roomAction(action){if(roomBusy)return;roomBusy=true;renderColorPickers();$('create-room').disabled=true;$('join-room').disabled=true;try{await action();}catch(error){roomError(error);}finally{roomBusy=false;renderColorPickers();$('create-room').disabled=Boolean(onlineRoom?.room);$('join-room').disabled=Boolean(onlineRoom?.room);}}
 const roomIdentity=()=>({name:$('room-name').value.trim()||'Player',color:colors.selected});
 $('create-room').addEventListener('click',()=>roomAction(async()=>{const c=pendingCheckpoint,room=await roomConnection().create({...roomIdentity(),mode:onlineMode,world:c?.world??0,slots:c?.players.length??Math.max(2,Math.min(5,count)),...(c?{checkpoint:checkpointHeader(c)}:{})});if(room)await onlineRoom.update({ready:true});}));
 $('join-room').addEventListener('click',()=>roomAction(async()=>{const room=await roomConnection().join($('room-code').value,roomIdentity());if(room){onlineMode=room.mode;pendingCheckpoint=null;}}));
@@ -111,7 +141,7 @@ async function onlinePacket(packet,from){
  if(!onlineRoom?.room||!packet||typeof packet!=='object')return;
  const host=onlineRoom.room.hostId;
  if(packet.type==='input'&&onlineRoom.host){const index=networkRoster.findIndex(p=>p.id===from);if(index>=0&&Number.isInteger(packet.mask)&&packet.mask>=0&&packet.mask<=(mode==='online-battle'?255:63))onlineMasks[index]=packet.mask;}
- else if(packet.type==='snapshot'&&from===host&&!onlineRoom.host){await pause();const save=await decodeSave(packet.blob),session=validateSession(save);if(session.onlineRoom.players.some(p=>!onlineRoom.room.players.some(q=>q.id===p.id)))throw new Error('The game snapshot has a different roster.');applySession(save,session);const mine=onlineRoom.room.players.find(p=>p.id===onlineRoom.playerId);colors.select(mine.color);if(session.mode==='online-battle')colors.setBattleColors(networkRoster.map(p=>p.color));$('color-select').value=mine.color;onlineMode=session.onlineRoom.mode;onlineSequence=0;onlineFrames=[];lastInput=-1;onlinePhase='sync';$('online-room-dialog').close();onlineRoom.toHost({type:'loaded',revision:ONLINE_REVISION});}
+ else if(packet.type==='snapshot'&&from===host&&!onlineRoom.host){await pause();const save=await decodeSave(packet.blob),session=validateSession(save);if(session.onlineRoom.players.some(p=>!onlineRoom.room.players.some(q=>q.id===p.id)))throw new Error('The game snapshot has a different roster.');applySession(save,session);const mine=onlineRoom.room.players.find(p=>p.id===onlineRoom.playerId);colors.select(mine.color);if(session.mode==='online-battle')colors.setBattleColors(networkRoster.map(p=>p.color));setSelectedColor(mine.color);onlineMode=session.onlineRoom.mode;onlineSequence=0;onlineFrames=[];lastInput=-1;onlinePhase='sync';renderColorPickers();$('online-room-dialog').close();onlineRoom.toHost({type:'loaded',revision:ONLINE_REVISION});}
  else if(packet.type==='loaded'&&onlineRoom.host&&onlinePhase==='sync'&&packet.revision===ONLINE_REVISION){onlineAcks.add(from);if(networkRoster.filter(p=>p.id!==onlineRoom.playerId).every(p=>onlineAcks.has(p.id))){onlinePhase='play';onlineRoom.broadcast({type:'play'});await resume();}}
  else if(packet.type==='play'&&from===host&&!onlineRoom.host){onlinePhase='play';await resume();updateOnlineInput();}
  else if(packet.type==='frames'&&from===host&&!onlineRoom.host&&onlinePhase==='play'){if(onlineFrames.length>=600)throw new Error('This browser fell too far behind the multiplayer game.');const expected=onlineSequence+onlineFrames.length;if(packet.start!==expected)throw new Error('Multiplayer frame order changed.');onlineFrames.push(packet);}
@@ -124,6 +154,7 @@ async function synchronizeOnlineStart(){
  if(onlineSending)return;onlineSending=true;onlinePhase='sync';await pause();try{await onlineRoom.sendSnapshot(await encodeSave(captureState(machine,sessionData())));message('Waiting for every player to load the shared game.');}catch(error){roomError(error);}finally{onlineSending=false;}
 }
 function setModeLabels(){
+ renderColorPickers();
  const watch=watchBots(count),alive=companions.state.bots.filter(b=>b.alive).length,transition=newCampaign?.state.transition,watchRetry=spectator?.state.transition;
  const names={solo:'CAMPAIGN',new:newCampaign?.state.ready||transition?`DLC · STAGE ${transition?.targetRound??newCampaign.state.round}${transition?transition.kind==='retry'?' · RESTARTING':' · NEXT ROUND':''}`:'DLC · PREPARING',campaign:'CAMPAIGN + AI','battle-ai':'BATTLE + AI','online-campaign':'CAMPAIGN · ONLINE','online-battle':'BATTLE · ONLINE'};
  $('mode-label').textContent=(watch?'WATCH · ':'')+names[mode];$('player-count').textContent=onlineGame()?`${count}P`:mode==='battle-ai'?watch?`${watch} AI`:`${count}P`:watch?`${alive} AI`:`${1+alive}P`;
@@ -166,7 +197,8 @@ $('pause-btn').addEventListener('click',async()=>{if(returnSave){await pause();c
 $('reset-btn').addEventListener('click',async()=>{await pause();if(onlineRoom?.room)await onlineRoom.leave();onlinePhase=null;pendingCheckpoint=null;finishTrace();returnSave=null;initialize(rom);updateMenu();message('Game reset. Opening the original main menu.');await resume();});
 $('open-menu-btn').addEventListener('click',openMenu);
 $('player-count-select').addEventListener('change',event=>nativeMenu.setCount(Number(event.target.value)));
-$('color-select').addEventListener('change',event=>{if(onlineGame()&&started){event.target.value=onlineRoom?.room?.players.find(p=>p.id===onlineRoom.playerId)?.color??colors.selected;message('Choose online colors in the lobby before starting.');return;}colors.select(event.target.value);if(onlineRoom?.room?.status==='lobby')roomAction(()=>onlineRoom.update({color:event.target.value,ready:false}));});
+$('color-select').addEventListener('change',event=>chooseColor(event.target.value));
+installColorPickers();
 $('mute-btn').addEventListener('click',()=>{muted=!muted;machine.WaveVolume=muted?0:.6;if(machine.WebAudioGainNode)machine.WebAudioGainNode.gain.value=machine.WaveVolume;$('mute-btn').textContent=muted?'Unmute':'Mute';$('mute-btn').setAttribute('aria-pressed',String(muted));});
 $('fullscreen-btn').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await $('game-canvas').requestFullscreen();}catch{message('Fullscreen is unavailable in this browser.');}});
 function sessionData(){return {frame,color:colors.selected,battleColors:colors.battleColors,mode,count,started,boot:structuredClone(boot),initialBots,openingIntro:{...introSkip.state},companions:structuredClone(companions.state),battleAI:structuredClone(battleAI.state),newCampaign:structuredClone(newCampaign.state),spectator:structuredClone(spectator.state),levelObjective:structuredClone(levelObjective.state),powerupHUD:structuredClone(powerupHUD.state),sharedPowerups:structuredClone(sharedPowerups.state),worldStart:structuredClone(worldStart.state),onlineCampaign:structuredClone(onlineCampaign.state),onlineRoom:onlineGame()?{revision:ONLINE_REVISION,mode:onlineMode,players:structuredClone(networkRoster)}:null,enemySpawns:structuredClone(enemySpawns.state),tracker:{...machine._campaignTracker}};}
