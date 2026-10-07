@@ -32,7 +32,7 @@ test('mixed-stage native enemies draw from their own ROM models and replay fresh
  for(let y=1;y<12;y++)for(let x=2;x<15;x++)p.RAM[0x44a+y*32+x]=0xca;
  const bot=crew.add(4,1);bot.color='orange';const vram=[...p.VDC[0].VRAM],palette=[...p.Palette],slots=[];
  for(const [type,x,y]of [[4,6,3],[8,10,3],[21,6,7]])slots.push(spawnEnemyType(p,type,x,y));
- assert.equal(enemyCatalog(p).filter(entry=>entry.available).length,23,'every ordinary species can spawn without a living template');
+ assert.equal(enemyCatalog(p).filter(entry=>entry.available&&entry.type<23).length,23,'every ordinary species can spawn without a living template');
  assert.deepEqual(p.VDC[0].VRAM,vram);assert.deepEqual(p.Palette,palette,'registration never uploads or replaces native artwork/palettes');frames(p,6);
  for(const type of [4,8,21])assert.ok(spawns.state.owners.some(owner=>owner?.type===type),`native SATB DMA retained type ${type} ownership`);
  let checked=0;const originalLine=p.VDC[0].DrawBGYLine,originalRegister=p.VDC[0].VDCRegister[5];p.VDC[0].VDCRegister[5]|=64;

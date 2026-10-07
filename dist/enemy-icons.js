@@ -76,13 +76,13 @@ export function enemyCatalog(p){
  const templates=new Map();for(const enemy of enemies(p))if(enemy.type<NORMAL_ENEMY_COUNT&&!templates.has(enemy.type))templates.set(enemy.type,enemy.slot);
  return Array.from({length:LIVING_MODEL_COUNT},(_,type)=>{
   const templateSlot=templates.get(type),boss=type>=NORMAL_ENEMY_COUNT;let icon=null;try{icon=decodeSpriteIcon(p,nativeEnemyPose(p,type),nativeEnemyAtlas(p,type));}catch{}
-  const available=!boss&&icon!==null&&!(p.RAM[0x43a]&7)&&!p.RAM[0x437];
-  return {type,name:type===2?'Ballom':boss?`Boss model ${type}`:`Monster type ${type}`,templateSlot,available,icon,notice:available?'Spawn in this stage':boss?'Boss / form preview only':icon?'Resume an active campaign stage':'Native graphics are not loaded'};
+ const available=icon!==null&&!(p.RAM[0x43a]&7)&&!p.RAM[0x437];
+ return {type,name:type===2?'Ballom':boss?`Boss model ${type}`:`Monster type ${type}`,templateSlot,available,icon,notice:available?(boss?'Spawn on any campaign map · 3 hits':'Spawn in this stage'):icon?'Resume an active campaign stage':'Native graphics are not loaded'};
  });
 }
 
 export function createEnemyCard(p,entry,{document=globalThis.document,onSpawn=()=>{}}={}){
- const button=document.createElement('button');button.className='enemy-card';button.type='button';button.disabled=!entry.available;button.setAttribute('aria-label',`${entry.name}. ${entry.notice}.`);
+ const button=document.createElement('button');button.className='enemy-card';button.type='button';button.disabled=!entry.available;button.setAttribute('data-enemy-type',String(entry.type));button.setAttribute('aria-label',`${entry.name}. ${entry.notice}.`);
  const preview=document.createElement('span');preview.className='enemy-preview';
  if(entry.icon){
   const canvas=document.createElement('canvas');canvas.className='enemy-icon';canvas.width=entry.icon.width;canvas.height=entry.icon.height;canvas.setAttribute('aria-hidden','true');

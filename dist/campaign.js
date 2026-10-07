@@ -176,6 +176,7 @@ export function spawnBomb(p,x,y,{slots=Array.from({length:10},(_,i)=>i),automati
  // Bombermen use ordinary bombs; their timer hook is independent of the human.
  p.RAM[0x84f+slot]=automatic&&slot<20?0xc0:0x80;p.RAM[0x877+slot]=x;p.RAM[0x89f+slot]=y;
  p.RAM[0x8c7+slot]=0;p.RAM[0x8ef+slot]=150;p.RAM[0x917+slot]=255;
+ p._rememberCompanionBombColor?.(slot,true);
  return slot;
 }
 export function spawnItem(p,type,x,y) {
@@ -270,11 +271,53 @@ const DEATH_POSES=[
  [[80,24,730,4236],[80,9,730,6284]]
 ];
 const visibleBot=b=>b.alive||(Number.isInteger(b.deathFrame)&&b.deathFrame<DEATH_FRAMES);
-export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={}) {
+const BOMB_PALETTE_BASE=3200,BOMB_SHADES={6:.71,7:.57,8:.86,10:.43,15:1};
+export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p),getHumanColor=()=> 'original'}={}) {
  installCampaignTracker(p);
- const state={bots:[],stage:null,nextID:1,steps:0,events:[],active:false,bombRanges:Array(40).fill(0),foeMotion:[]};
+ const state={bots:[],stage:null,nextID:1,steps:0,events:[],active:false,bombRanges:Array(40).fill(0),bombColors:Array(40).fill(null),foeMotion:[]};
  p._companionBombRanges=state.bombRanges;
  const paletteCache=new Map();
+ const bombPaletteCache=new Map(),bombVariants=Object.keys(COLORS),originalBackground=p.MakeBGLine,originalSet=p.Set;let bombColorsEnabled=true;
+ function rememberBombColor(slot,fresh=false){
+   if(fresh||!(p.RAM[0x84f+slot]&128))state.bombColors[slot]=null;
+   if(!(p.RAM[0x84f+slot]&128)||state.bombColors[slot]!==null||!isCampaign(p))return;
+   const bank=slot>=20?Math.floor((slot-20)/5):slot<5?4:-1,actor=state.bots.find(bot=>bot.bombBank===bank);
+   const color=actor?.color??(slot<10&&!(p.RAM[0x84f+slot]&64)&&getHuman()?getHumanColor():null);
+   if(color!==null&&Object.hasOwn(COLORS,color))state.bombColors[slot]=color;
+ }
+ p._rememberCompanionBombColor=rememberBombColor;
+ p.Set=function(address,value){
+  const physical=this.MPR[address>>13]|(address&8191),offset=physical&8191,result=originalSet.call(this,address,value);
+  if(physical>=0x1f0000&&physical<0x1f8000&&offset>=0x84f&&offset<0x877)rememberBombColor(offset-0x84f);
+  return result;
+ };
+ function bombPalette(color){
+  const palette=BOMB_PALETTE_BASE+bombVariants.indexOf(color)*16,key=p.Palette.slice(0x80,0x90).join(',');
+  if(bombPaletteCache.get(color)!==key||!p.PaletteData[palette]){
+   const white=p.Palette[0x8f],fade=Math.max((white>>3)&7,(white>>6)&7,white&7)/7;
+   for(let i=0;i<16;i++){
+    const raw=p.Palette[0x80+i],shade=BOMB_SHADES[i],rgb=shade===undefined?{r:((raw>>3)&7)*36,g:((raw>>6)&7)*36,b:(raw&7)*36}:Object.fromEntries(['r','g','b'].map((channel,j)=>[channel,Math.round(COLORS[color][j]*shade*fade)]));
+    p.PaletteData[palette+i]=rgb;const m=rgb.r*.299+rgb.g*.587+rgb.b*.114;p.MonoPaletteData[palette+i]={r:m,g:m,b:m};
+   }
+   bombPaletteCache.set(color,key);
+  }
+  return palette;
+ }
+ // Native bombs are animated background tiles. Change only their body-color
+ // indices after the native compositor, leaving outlines, fuses, floor,
+ // overlaid sprites and every explosion pixel unchanged.
+ p.MakeBGLine=function(n){
+  originalBackground.call(this,n);if(n!==0||!bombColorsEnabled||!isCampaign(this))return;
+  const v=this.VDC[0];if(!(v.VDCRegister[5]&128))return;
+  const y=v.DrawBGLine&((v.VScreenHeight-1)*8+7),worldY=Math.floor(y/16),scroll=v.VDCRegister[7],left=((v.HDS+v.HSW)<<3)+v.DrawBGIndex;
+  for(let slot=0;slot<40;slot++){
+   const color=state.bombColors[slot];if(color===null||!(this.RAM[0x84f+slot]&128)||this.RAM[0x917+slot]!==255||tileKind(this,this.RAM[0x877+slot],this.RAM[0x89f+slot])!==0||this.RAM[0x89f+slot]!==worldY)continue;
+   const start=this.RAM[0x877+slot]*16-scroll,palette=bombPalette(color);
+   for(let x=Math.max(0,start);x<Math.min(v.ScreenWidth,start+16);x++){
+    const pixel=v.BGLine[left+x];if(pixel>=0x80&&pixel<0x90&&Object.hasOwn(BOMB_SHADES,pixel&15))v.BGLine[left+x]=palette+(pixel&15);
+   }
+  }
+ };
  const originalSpriteLine=p.MakeSpriteLine;
  const cpu=p.CPURun;
  const get=p.Get;
@@ -301,7 +344,7 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
  function respawnForStage(){
   const online=p._onlineCampaign?.state.enabled,roster=online?state.bots:state.bots.filter(b=>b.alive),human=getHuman(),blocked=human?new Set([key(Math.floor(human.x/16),Math.floor(human.y/16))]):new Set(),cells=campaignSpawnCells(p,roster.length,{blocked});
   if(cells.length!==roster.length)return false;
-  state.bots=roster;state.foeMotion=[];state.bombRanges.fill(0);state.stage=stageID(p);
+  state.bots=roster;state.foeMotion=[];state.bombRanges.fill(0);state.bombColors.fill(null);state.stage=stageID(p);
   for(let i=0;i<roster.length;i++){const bot=roster[i],cell=cells[i];bot.x=cell.x*16+8;bot.y=cell.y*16+8;bot.alive=true;bot.deathFrame=null;bot.target=null;bot.route=[];bot.goal=null;bot.yieldFrames=0;bot.cooldown=30;bot.remoteTimers.fill(0);bot.direction=2;bot.animation=0;bot.action='Starting this stage';}
   return true;
  }
@@ -338,6 +381,7 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
  }
  function update() {
   if(!isCampaign(p)){state.active=false;return;}
+  for(let slot=0;slot<40;slot++)rememberBombColor(slot);
   p._botSkullCells=new Set(pickups(p).filter(i=>i.type===8).map(i=>key(i.x,i.y)));
   for(const b of state.bots)if(!b.alive&&Number.isInteger(b.deathFrame)&&b.deathFrame<DEATH_FRAMES)b.deathFrame++;
   if((p.RAM[0x43a]&7)||p.RAM[0x437]){state.active=false;return;}
@@ -480,15 +524,16 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
    }
   }
  };
- return {state,add,update,respawnForStage,restore(data){validateCompanionState(data);Object.assign(state,{bombRanges:Array(40).fill(0),foeMotion:[]},structuredClone(data));p._companionBombRanges=state.bombRanges;p._botSkullCells=undefined;for(const [i,b]of state.bots.entries()){if(b.deathFrame===undefined)b.deathFrame=b.alive?null:DEATH_FRAMES;if(b.bombBank===undefined)b.bombBank=i;if(b.bombCapacity===undefined)b.bombCapacity=1;const defaults={fireRange:Math.max(1,Math.min(5,p.RAM[0x84d]&127)),speedUp:false,remote:false,bombPass:false,wallPass:false,fireproof:0,extraLives:0,pickupsCollected:0,remoteTimers:Array(5).fill(0),goal:null,yieldFrames:0};for(const [k,v]of Object.entries(defaults))if(b[k]===undefined)b[k]=v;}},reset(){state.bots=[];state.stage=null;state.steps=0;state.events=[];state.nextID=1;state.active=false;state.bombRanges.fill(0);state.foeMotion=[];p._botSkullCells=undefined;}};
+ return {state,add,update,respawnForStage,setBombColors(enabled){bombColorsEnabled=Boolean(enabled);},get bombColorsEnabled(){return bombColorsEnabled;},restore(data){validateCompanionState(data);Object.assign(state,{bombRanges:Array(40).fill(0),bombColors:Array(40).fill(null),foeMotion:[]},structuredClone(data));p._companionBombRanges=state.bombRanges;p._botSkullCells=undefined;bombPaletteCache.clear();for(const color of bombVariants)bombPalette(color);for(const [i,b]of state.bots.entries()){if(b.deathFrame===undefined)b.deathFrame=b.alive?null:DEATH_FRAMES;if(b.bombBank===undefined)b.bombBank=i;if(b.bombCapacity===undefined)b.bombCapacity=1;const defaults={fireRange:Math.max(1,Math.min(5,p.RAM[0x84d]&127)),speedUp:false,remote:false,bombPass:false,wallPass:false,fireproof:0,extraLives:0,pickupsCollected:0,remoteTimers:Array(5).fill(0),goal:null,yieldFrames:0};for(const [k,v]of Object.entries(defaults))if(b[k]===undefined)b[k]=v;}},reset(){state.bots=[];state.stage=null;state.steps=0;state.events=[];state.nextID=1;state.active=false;state.bombRanges.fill(0);state.bombColors.fill(null);state.foeMotion=[];p._botSkullCells=undefined;}};
 }
 export function validRoute(route){return Array.isArray(route)&&route.length<=1024&&route.every(validTile);}
 export function validTile(t){return t&&Number.isInteger(t.x)&&t.x>=2&&t.x<=31&&Number.isInteger(t.y)&&t.y>=1&&t.y<=31&&(t.button===undefined||NEIGHBORS.some(n=>n[2]===t.button));}
 export function validateCompanionState(data){
  const integer=n=>Number.isSafeInteger(n)&&n>=0;
- if(!data||Object.keys(data).some(k=>!['bots','stage','nextID','steps','events','active','bombRanges','foeMotion'].includes(k))||!Array.isArray(data.bots)||data.bots.length>5||!integer(data.nextID)||!integer(data.steps)||typeof data.active!=='boolean'||(data.stage!==null&&!/^[0-7]:[0-7]$/.test(data.stage))||!Array.isArray(data.events)||data.events.length>40)throw new Error('Invalid teammate state in save.');
+ if(!data||Object.keys(data).some(k=>!['bots','stage','nextID','steps','events','active','bombRanges','bombColors','foeMotion'].includes(k))||!Array.isArray(data.bots)||data.bots.length>5||!integer(data.nextID)||!integer(data.steps)||typeof data.active!=='boolean'||(data.stage!==null&&!/^[0-7]:[0-7]$/.test(data.stage))||!Array.isArray(data.events)||data.events.length>40)throw new Error('Invalid teammate state in save.');
  if(data.foeMotion!==undefined&&(!Array.isArray(data.foeMotion)||data.foeMotion.length>32||new Set(data.foeMotion.map(e=>e?.slot)).size!==data.foeMotion.length||data.foeMotion.some(e=>!e||!integer(e.slot)||e.slot>31||!integer(e.type)||e.type>255||![e.x,e.y].every(n=>Number.isFinite(n)&&n>=0&&n<=65535)||![e.vx,e.vy].every(n=>Number.isFinite(n)&&Math.abs(n)<=2)||['speedX','speedY'].some(k=>e[k]!==undefined&&(!Number.isFinite(e[k])||e[k]<0||e[k]>2)))))throw new Error('Invalid monster motion in save.');
  if(data.bombRanges!==undefined&&(!Array.isArray(data.bombRanges)||data.bombRanges.length!==40||data.bombRanges.some(n=>!integer(n)||n>5)))throw new Error('Invalid saved bomb ranges.');
+ if(data.bombColors!==undefined&&(!Array.isArray(data.bombColors)||data.bombColors.length!==40||data.bombColors.some(color=>color!==null&&!Object.hasOwn(COLORS,color))))throw new Error('Invalid saved bomb colors.');
  for(const b of data.bots)if(!b||!Object.hasOwn(COLORS,b.color)||!integer(b.id)||!Number.isFinite(b.x)||!Number.isFinite(b.y)||b.x<32||b.x>520||b.y<16||b.y>520||typeof b.alive!=='boolean'||(b.target!==null&&!validTile(b.target))||!validRoute(b.route)||!integer(b.cooldown)||!integer(b.animation)||!integer(b.bombsPlaced)||!Number.isInteger(b.direction)||b.direction<0||b.direction>3||typeof b.action!=='string'||b.action.length>100)throw new Error('Invalid teammate state in save.');
  for(const b of data.bots)if(b.deathFrame!==undefined&&(b.alive?b.deathFrame!==null:!integer(b.deathFrame)||b.deathFrame>DEATH_FRAMES))throw new Error('Invalid teammate death animation in save.');
  for(const b of data.bots)if((b.bombBank!==undefined&&(!integer(b.bombBank)||b.bombBank>4))||(b.bombCapacity!==undefined&&(!integer(b.bombCapacity)||b.bombCapacity<1||b.bombCapacity>5)))throw new Error('Invalid teammate bomb inventory in save.');

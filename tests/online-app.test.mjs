@@ -15,7 +15,7 @@ async function probe(scenario=''){
 }
 test('two complete apps create a lobby, synchronize controls, share upgrades and restart a saved level',{skip:!process.env.BOMBERMAN_TEST_ROM,timeout:180000},async()=>{
  const result=await probe();
- assert.equal(result.players,2);assert.equal(result.sharedUpgrades,true);assert.equal(result.cameraViews,true);assert.equal(result.restartLevel,'4-4');assert.equal(result.remoteReleased,true);assert.equal(result.battleControllers,true);assert.ok(result.frames>=120);
+ assert.equal(result.players,2);assert.equal(result.sharedUpgrades,true);assert.equal(result.cameraViews,true);assert.equal(result.bombColorPreferences,true);assert.equal(result.hostAdmin,true);assert.equal(result.restartLevel,'4-4');assert.equal(result.remoteReleased,true);assert.equal(result.battleControllers,true);assert.equal(result.battleBombs,true);assert.ok(result.frames>=120);
 });
 test('online startup keeps running when browser audio suspension never settles',{skip:!process.env.BOMBERMAN_TEST_ROM,timeout:90000},async()=>{
  const result=await probe('audio-hang');assert.equal(result.scenario,'audio-hang');assert.equal(result.unsettledAudio,true);assert.ok(result.frames>=120);
@@ -40,5 +40,5 @@ test('zero-life online campaign offers a host choice to restart its world or qui
 });
 
 test('a custom-key host stream runs only the host emulator while a guest without a ROM receives media and controls its own actor',{skip:!process.env.BOMBERMAN_TEST_ROM,timeout:150000},async()=>{
- const result=await probe('host-stream');assert.equal(result.noGuestEmulator,true);assert.equal(result.videoAudio,true);assert.equal(result.remoteControls,true);assert.equal(result.noSimulationBackpressure,true);assert.equal(result.worldContinue,true);assert.equal(result.cleanQuit,true);assert.equal(result.streamPreferences,true);assert.equal(result.streamDiagnostics,true);assert.equal(result.pauseResume,true);assert.equal(result.customRoomKey,true);
+ const result=await probe('host-stream');assert.equal(result.noGuestEmulator,true);assert.equal(result.videoAudio,true);assert.equal(result.remoteControls,true);assert.equal(result.remoteDetonation,true);assert.equal(result.bombColorPreferences,true);assert.equal(result.hostAdmin,true);assert.equal(result.noSimulationBackpressure,true);assert.equal(result.worldContinue,true);assert.equal(result.cleanQuit,true);assert.equal(result.streamPreferences,true);assert.equal(result.streamDiagnostics,true);assert.equal(result.pauseResume,true);assert.equal(result.customRoomKey,true);
 });

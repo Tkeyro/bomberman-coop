@@ -21,6 +21,16 @@ function assertColorUI(app,color,{disabled=false}={}){
   assert.equal(button.disabled,disabled,`${group} ${button.dataset.color} availability`);
  }
 }
+async function bombColorPreference(app,enabled){
+ const checkbox=app.e.get('bomb-colors-toggle');assert.ok(checkbox,'owner bomb colors have a visible preference');
+ checkbox.checked=enabled;await checkbox.listeners.change({target:checkbox});
+ assert.equal(checkbox.checked,enabled);assert.equal(app.preference('bomberman-bomb-colors'),String(enabled),'the checkbox stores its local preference');
+ if(app.machine)assert.equal(app.machine._fixtureCompanions.bombColorsEnabled,enabled,'the preference reaches the actual campaign renderer');
+}
+async function presentationOnlyBombPreference(app,enabled){
+ const p=app.machine,gameplay=()=>JSON.stringify({registers:[p.PC,p.A,p.X,p.Y,p.S,p.P,p.ProgressClock],ram:p.RAM,companions:p._fixtureCompanions.state,online:p._onlineCampaign.state,shared:p._sharedPowerups.state,goal:p._levelObjective.state});
+ const before=gameplay();await bombColorPreference(app,enabled);assert.equal(gameplay(),before,'a live color preference changes no state included in the multiplayer checksum');
+}
 class D1SQLite{
  constructor(){this.sqlite=new DatabaseSync(':memory:');this.sqlite.exec('PRAGMA foreign_keys=ON');const journal=JSON.parse(fs.readFileSync(new URL('drizzle/meta/_journal.json',root),'utf8'));for(const entry of journal.entries)this.sqlite.exec(fs.readFileSync(new URL(`drizzle/${entry.tag}.sql`,root),'utf8'));}
  withSession(){return this;}
@@ -66,7 +76,7 @@ async function app(name,id,color,gameMode='campaign',players=2,{rom=true}={}){
  const elements=new Map(),timers=new Map(),modules=new Map();let timerID=0,nextFrame,clock=1000,machine,exported,draws=0;
  const document={getElementById:id=>elements.get(id),activeElement:null,hidden:false,addEventListener(){},createElement:element};
  function element(){return {value:'',textContent:'',disabled:false,hidden:false,open:false,listeners:{},children:[],style:{},attributes:{},dataset:{},width:684,height:262,srcObject:null,playCalls:0,pauseCalls:0,captures:[],addEventListener(type,fn){this.listeners[type]=fn;},setAttribute(key,value){this.attributes[key]=value;},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];this.textContent='';},focus(){document.activeElement=this;},click(){return this.listeners.click?.();},showModal(){this.open=true;},close(){this.open=false;},async play(){this.playCalls++;},pause(){this.pauseCalls++;},captureStream(fps){const value=new MediaStream([new MediaTrack('video')]);this.captures.push({fps,stream:value});return value;},getContext(){return {createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),putImageData(){draws++;}};}};}
- for(const [tag,id]of html.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)){const node=element();node.disabled=/\bdisabled(?:\s|=|>)/.test(tag);node.hidden=/\bhidden(?:\s|=|>)/.test(tag);elements.set(id,node);}
+ for(const [tag,id]of html.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)){const node=element();node.disabled=/\bdisabled(?:\s|=|>)/.test(tag);node.hidden=/\bhidden(?:\s|=|>)/.test(tag);node.checked=/\bchecked(?:\s|=|>)/.test(tag);elements.set(id,node);}
  elements.get('color-select').value=color;elements.get('player-count-select').value='2';elements.get('room-name').value=name;
  if(elements.has('room-transport'))elements.get('room-transport').value='sync';
  const window={listeners:{},addEventListener(type,fn){this.listeners[type]=fn;}};
@@ -82,11 +92,15 @@ async function app(name,id,color,gameMode='campaign',players=2,{rom=true}={}){
  class LocalURL extends URL{static createObjectURL(blob){exported=blob;return 'blob:test';}static revokeObjectURL(){}}
  const storage=new Map([['bomberman-player-id',id]]);
  const context=vm.createContext({console,document,window,...(audioEnabled?{AudioContext}:{}),MediaStream,Blob,Response,Request,Headers,CompressionStream,DecompressionStream,TextEncoder,TextDecoder,structuredClone,crypto:webcrypto,fetch:fetchLobby,RTCPeerConnection:Peer,URL:LocalURL,location:{href:'https://game.test/'},navigator:{},Event,EventTarget,atob,btoa,queueMicrotask,indexedDB:undefined,performance:{now:()=>clock},localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},requestAnimationFrame:fn=>{nextFrame=fn;},setTimeout:(fn,ms)=>{const id=++timerID;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)});
- async function module(url){const key=url.href;if(modules.has(key))return modules.get(key);const result=new vm.SourceTextModule(fs.readFileSync(url,'utf8'),{context,identifier:key,initializeImportMeta:meta=>{meta.url=key;}});modules.set(key,result);return result;}
+ async function module(url){const key=url.href;if(modules.has(key))return modules.get(key);let source=fs.readFileSync(url,'utf8');
+  // Retain the real controller for presentation-preference assertions. This
+  // fixture-only exposure changes no CPU, rendering, state or input behavior.
+  if(key.endsWith('/dist/campaign.js')){const marker='return {state,add,update,respawnForStage,setBombColors';assert.ok(source.includes(marker));source=source.replace(marker,'return p._fixtureCompanions={state,add,update,respawnForStage,setBombColors');}
+  const result=new vm.SourceTextModule(source,{context,identifier:key,initializeImportMeta:meta=>{meta.url=key;}});modules.set(key,result);return result;}
  async function load(path){const result=await module(new URL(path,root));if(result.status==='unlinked')await result.link((specifier,parent)=>module(new URL(specifier,parent.identifier)));if(result.status==='linked')await result.evaluate();return result.namespace;}
  const vendor=await load('dist/vendor/pce.js'),setCanvas=vendor.PCE.prototype.SetCanvas;vendor.PCE.prototype.SetCanvas=function(id){machine=this;return setCanvas.call(this,id);};
  await load('dist/app.js');
- const result={name,id,e:elements,window,load,timers,context,get machine(){return machine;},get exported(){return exported;},get draws(){return draws;},
+ const result={name,id,e:elements,window,load,timers,context,preference:key=>storage.get(key),get machine(){return machine;},get exported(){return exported;},get draws(){return draws;},
   async key(code,up=false){window.listeners[up?'keyup':'keydown']({code,preventDefault(){}});await flush();},
   tick(){clock+=50;nextFrame(clock);},
   costRuns(ms){const original=machine.Run;machine.Run=function(...args){const result=original.apply(this,args);clock+=ms;return result;};return ()=>{machine.Run=original;};},
@@ -94,12 +108,17 @@ async function app(name,id,color,gameMode='campaign',players=2,{rom=true}={}){
   async export(){await elements.get('export-save-btn').click();assert.match(elements.get('save-status').textContent,/exported/);return (await load('dist/save-state.js')).decodeSave(exported);},
  status(){return [elements.get('load-status').textContent,elements.get('room-status').textContent,elements.get('save-status').textContent].join(' | ');}
  };
+ assert.equal(elements.get('bomb-colors-toggle').checked,true,'owner colors default on before loading a ROM');
+ await bombColorPreference(result,false);await bombColorPreference(result,true);
+ await bombColorPreference(result,name==='Guest'||name==='Battle guest');
+ assert.equal(machine,undefined,'changing the preference before ROM loading does not construct an emulator');
  // Color choice works before ROM loading, and both visible groups agree.
  assert.equal(colorButton(result,'original','color-options').disabled,false);
  await colorButton(result,'original','color-options').click();assertColorUI(result,'original');
  await colorButton(result,color,'color-options').click();assertColorUI(result,color);
  if(!rom){assert.equal(machine,undefined,'a stream guest has not constructed an emulator');await elements.get('join-online-btn').click();assert.equal(elements.get('online-room-dialog').open,true,result.status());return result;}
  await elements.get('rom-input').listeners.change({target:{files:[{size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)}]}});assert.match(elements.get('load-status').textContent,/verified/,result.status());
+ assert.equal(machine._fixtureCompanions.bombColorsEnabled,elements.get('bomb-colors-toggle').checked,'the stored preference applies when the ROM initializes');
  assertColorUI(result,color);
  for(let i=0;i<110;i++)result.tick();
  await result.key('ArrowDown');await result.key('ArrowDown');if(gameMode==='battle')await result.key('ArrowDown');if(players!==2){elements.get('player-count-select').value=String(players);elements.get('player-count-select').listeners.change({target:{value:String(players)}});}await result.key('Enter');await result.key('ArrowDown');await result.key('Enter');assert.equal(elements.get('online-room-dialog').open,true,result.status());
@@ -125,6 +144,47 @@ async function join(){
 }
 async function synchronize(){await host.e.get('room-start').click();for(let n=0;n<700;n++){host.tick();await flush();if(host.e.get('pause-btn').textContent==='Resume')await new Promise(resolve=>setTimeout(resolve,5));if(guest.e.get('online-room-dialog').open===false&&guest.e.get('pause-btn').textContent==='Pause')return;}assert.fail(host.status()+' / '+guest.status()+JSON.stringify({frame:host.e.get('frame-count').textContent,campaign:host.machine._onlineCampaign.state,stage:host.machine.RAM.slice(0x84a,0x84c),packets:channels.map(c=>c.sent.slice(-3).map(s=>JSON.parse(s).type))}));}
 async function advance(count){for(let i=0;i<count;i++){host.tick();await flush();guest.tick();await flush();if(third){third.tick();await flush();}assert.doesNotMatch(host.status()+guest.status(),/Emulation stopped|out of sync|frame order|different roster/);}}
+async function hostAdminEdits({stream=false}={}){
+ const p=host.machine,campaign=await host.load('dist/campaign.js'),members=p._onlineCampaign.state.roster.map(r=>r.id),humans=()=>p._fixtureCompanions.state.bots.filter(actor=>members.includes(actor.id)).map(actor=>({id:actor.id,x:actor.x,y:actor.y,alive:actor.alive}));
+ const before={room:host.e.get('room-code').value,stage:Array.from(p.RAM.slice(0x84a,0x84c)),lives:p.RAM[0x438],humans:humans()};
+ assert.equal(guest.e.get('admin-btn').disabled,true,'only the multiplayer host owns the admin button');
+ const guestTools=guest.e.get('spawn-tool').textContent;
+ await guest.key('F2');await guest.e.get('admin-btn').click();await guest.e.get('item-grid').children[0].click();await guest.e.get('spawn-bot').click();
+ assert.equal(guest.e.get('admin-dialog').open,false,'guest hotkeys and programmatic buttons cannot open admin');assert.equal(guest.e.get('spawn-tool').textContent,guestTools,'guest programmatic tools cannot start placement');
+ assert.equal(host.e.get('admin-btn').disabled,false);await guest.key('KeyD');await host.key('F2');assert.equal(host.e.get('admin-dialog').open,true,'host F2 opens the multiplayer inventory');
+ await guest.key('KeyD',true);
+ for(const app of [host,guest])assert.equal(app.e.get('pause-btn').textContent,'Resume','opening the host inventory pauses everyone');
+ const frame=p._onlineCampaign.state.frame;await advance(2);assert.equal(p._onlineCampaign.state.frame,frame,'no gameplay advances while admin places objects');
+ async function tile(x,y){const button=host.e.get('admin-map').children.find(button=>button.title===`Tile ${x}, ${y}`);assert.ok(button,`admin exposes tile ${x}, ${y}`);assert.equal(button.disabled,false);await button.click();}
+ const items=campaign.pickups(p).length,enemies=campaign.enemies(p).length,bots=p._fixtureCompanions.state.bots.length;
+ await host.e.get('item-grid').children[0].click();await tile(20,15);await tile(21,15);assert.equal(campaign.pickups(p).length,items+2,'one item selection places copies on multiple tiles');
+ const monster=host.e.get('enemy-grid').children.find(button=>/^Monster type 0\./.test(button.attributes['aria-label']));assert.ok(monster);assert.equal(monster.disabled,false);await monster.click();await tile(22,15);assert.equal(campaign.enemies(p).length,enemies+1,'the host spawns an original enemy in the shared map');
+ await host.e.get('spawn-bot').click();await tile(23,15);assert.equal(p._fixtureCompanions.state.bots.length,bots+1,'the host adds an AI teammate without changing the human roster');
+ const spawned=p._fixtureCompanions.state.bots.at(-1).id;
+ const boss=host.e.get('enemy-grid').children.find(button=>/^Boss model 23\./.test(button.attributes['aria-label']));assert.ok(boss);assert.equal(boss.disabled,false,'an original boss model is available on this regular map');await boss.click();await tile(25,15);
+ const bossActor=p._bossSpawns.state.actors.find(actor=>actor.type===23);assert.ok(bossActor);assert.equal(bossActor.hp,3,'the admin boss starts with three hits');
+ same(humans(),before.humans);same(p._onlineCampaign.state.roster.map(r=>r.id),members);
+ await host.e.get('admin-close').click();await flush();
+ for(let n=0;n<120&&![host,guest].every(app=>app.e.get('pause-btn').textContent==='Pause');n++){
+  await advance(1);if(host.e.get('pause-btn').textContent==='Resume')await new Promise(resolve=>setTimeout(resolve,5));
+ }
+ assert.equal(host.e.get('admin-dialog').open,false);for(const app of [host,guest])assert.equal(app.e.get('pause-btn').textContent,'Pause','closing the host inventory resumes the existing room after synchronization');
+ assert.equal(host.e.get('room-code').value,before.room);assert.equal(guest.e.get('room-code').value,before.room);same(p.RAM.slice(0x84a,0x84c),before.stage);assert.equal(p.RAM[0x438],before.lives);same(humans(),before.humans);
+ await advance(1);same(humans(),before.humans);assert.equal(p._onlineCampaign.state.inputs[1],0,'releasing a guest key while admin is paused does not leave stale movement on Resume');
+ assert.ok(p._fixtureCompanions.state.bots.some(actor=>actor.id===spawned));assert.equal(campaign.pickups(p).length,items+2);
+ if(!stream){same(host.machine.RAM,guest.machine.RAM);same(p._fixtureCompanions.state,guest.machine._fixtureCompanions.state);same(p._bossSpawns.state,guest.machine._bossSpawns.state);assert.equal(host.machine.PC,guest.machine.PC,'admin snapshot keeps both native machines synchronized');assert.equal(guest.machine._fixtureCompanions.bombColorsEnabled,true,'admin snapshot preserves the guest display preference');}
+ // Opening inventory while already paused must finish its edit handshake
+ // without silently starting the round. Resume remains the host's choice.
+ await host.e.get('pause-btn').click();await flush();await host.key('F2');assert.equal(host.e.get('admin-dialog').open,true);
+ await host.e.get('item-grid').children[0].click();await tile(26,15);
+ const pausedNative={ram:Array.from(p.RAM),pc:p.PC,humans:humans()};await host.e.get('admin-close').click();await flush();
+ if(!stream)for(let n=0;n<120&&!/Admin changes synchronized/.test(host.status()+guest.status());n++){await advance(1);await new Promise(resolve=>setTimeout(resolve,5));}
+ for(const app of [host,guest])assert.equal(app.e.get('pause-btn').textContent,'Resume','admin opened from Pause keeps the existing round paused');
+ same(p.RAM,pausedNative.ram);assert.equal(p.PC,pausedNative.pc);same(humans(),pausedNative.humans);
+ if(!stream){assert.match(host.status(),/Admin changes synchronized/);same(p.RAM,guest.machine.RAM);same(p._bossSpawns.state,guest.machine._bossSpawns.state);}
+ await host.e.get('pause-btn').click();await flush();for(const app of [host,guest])assert.equal(app.e.get('pause-btn').textContent,'Pause','the host can resume after paused admin edits');
+ return true;
+}
 await join();
 if(scenario==='player-departure'){third=await app('Third','third-player-0001','blue');third.e.get('room-code').value=host.e.get('room-code').value;await third.e.get('join-room').click();await third.e.get('room-ready').click();await negotiate();assert.equal(host.e.get('room-list').children.length,3);}
 // The picker is inside the modal. Changing a ready player's color updates the
@@ -161,6 +221,7 @@ if(scenario==='host-stream'){
  assert.ok([...peers.values()].some(p=>p.senders.some(s=>s.track.kind==='video'&&s.parameters.degradationPreference==='maintain-framerate')),'the stream sender prefers timely frames when the encoder must adapt');
  const receivers=[...peers.values()].flatMap(p=>p.receivers);assert.equal(receivers.length,2);assert.ok(receivers.every(receiver=>receiver.jitterBufferTarget===0),'supported video and audio receivers request minimum additional buffering');
  for(const id of ['save-btn','export-save-btn','admin-btn'])assert.equal(guest.e.get(id).disabled,true,`${id} belongs to the emulator host`);
+ assert.equal(guest.e.get('bomb-colors-toggle').disabled,true,'streamed guests watch the host color preference');assert.equal(host.e.get('bomb-colors-toggle').disabled,false);
  for(const a of [host,guest]){await a.e.get('join-online-btn').click();assert.equal(a.e.get('online-room-dialog').open,false,'Join cannot replace a playing session with the lobby phase');assert.equal(a.e.get('pause-btn').textContent,'Pause');}
  const actors=new Map(),control=host.machine._onlineCampaign.control;
  host.machine._onlineCampaign.control=function(actor){actors.set(actor.id,actor);return control(actor);};await advance(1);assert.equal(actors.size,2);
@@ -177,8 +238,43 @@ if(scenario==='host-stream'){
  assert.match(host.e.get('online-health').textContent,/Encode 3 ms/);assert.match(host.e.get('online-health').textContent,/Encoder limited by bandwidth/);
  const remote=actors.get(2);remote.x=Math.floor(remote.x/16)*16+8;remote.y=Math.floor(remote.y/16)*16+8;
  campaign.spawnItem(host.machine,1,Math.floor(remote.x/16),Math.floor(remote.y/16));await advance(2);assert.equal(host.machine._sharedPowerups.state.counts[1],1,'streamed teams still share upgrades');
- const bombs=remote.bombsPlaced;await guest.key('Space');await advance(1);await guest.key('Space',true);assert.equal(remote.bombsPlaced,bombs+1,'streamed guest bomb input reaches the authoritative emulator');assert.ok(campaign.bombs(host.machine).length>0);
- host.machine.RAM.fill(0,0x84f,0x877);const frame=host.machine._onlineCampaign.state.frame;
+ // Exercise the real keyboard handlers and ordered peer input, rather than
+ // calling online controls directly. A shared Remote Control pickup must let
+ // each person release their own held bombs all the way through native flames.
+ const local=actors.get(1);Object.assign(local,{x:56,y:56});Object.assign(remote,{x:184,y:56});
+ campaign.spawnItem(host.machine,2,11,3);await advance(2);
+ assert.equal(host.machine._sharedPowerups.state.counts[2],1);assert.equal(local.remote,true);assert.equal(remote.remote,true,'the guest pickup shares Remote Control with both players');
+ async function placeFromKeyboard(app,actor,x,y){
+  actor.x=x*16+8;actor.y=y*16+8;const placed=actor.bombsPlaced;
+  await app.key('Space');await advance(1);await app.key('Space',true);
+  assert.equal(actor.bombsPlaced,placed+1,'each streamed player places its own bomb from keyboard input');
+  const bomb=campaign.bombs(host.machine).find(b=>b.x===x&&b.y===y&&campaign.companionBombSlots(actor).includes(b.slot));assert.ok(bomb,'the native bomb belongs to the actor who placed it');
+  actor.y=120;return bomb;
+ }
+ const localBomb=await placeFromKeyboard(host,local,3,3),guestBomb=await placeFromKeyboard(guest,remote,11,3);
+ assert.equal(host.machine._fixtureCompanions.state.bombColors[localBomb.slot],'black');assert.equal(host.machine._fixtureCompanions.state.bombColors[guestBomb.slot],'orange');
+ await presentationOnlyBombPreference(host,true);await presentationOnlyBombPreference(host,false);
+ await advance(65);
+ for(const bomb of [localBomb,guestBomb]){assert.equal(host.machine.RAM[0x917+bomb.slot],255,'Remote Control holds bombs past the normal fuse');assert.ok(host.machine.RAM[0x8ef+bomb.slot]>100);}
+ async function expectFlames(bomb){
+  for(let n=0;n<12;n++){
+   if([11,12].includes(campaign.tileKind(host.machine,bomb.x,bomb.y))&&[11,12].includes(campaign.tileKind(host.machine,bomb.x+1,bomb.y)))return;
+   await advance(1);
+  }
+  assert.fail(`keyboard detonation did not create native center and neighboring flames for bomb ${bomb.slot}`);
+ }
+ await host.key('KeyB');await expectFlames(localBomb);
+ assert.equal(host.machine.RAM[0x917+guestBomb.slot],255,'host B does not release the guest bomb');assert.ok(host.machine.RAM[0x8ef+guestBomb.slot]>100);
+ await host.key('KeyB',true);await guest.key('KeyX');await expectFlames(guestBomb);await guest.key('KeyX',true);
+ await advance(35);
+ for(const bomb of [localBomb,guestBomb]){assert.equal(host.machine.RAM[0x84f+bomb.slot],0,'native flames finish and return the owner bomb slot');assert.equal(campaign.tileKind(host.machine,bomb.x,bomb.y),10);}
+ const repeated=await placeFromKeyboard(guest,remote,11,3);await advance(3);
+ assert.equal(host.machine.RAM[0x917+repeated.slot],255,'releasing X leaves a newly placed remote bomb held');
+ await guest.key('KeyX');await expectFlames(repeated);await guest.key('KeyX',true);await advance(35);
+ assert.equal(host.machine.RAM[0x84f+repeated.slot],0,'a second press of X detonates the next bomb');
+ assert.ok(channels.some(c=>c.sent.some(data=>{const packet=JSON.parse(data);return packet.type==='input'&&packet.mask===32;})),'guest X crosses the data channel as Button II');
+ await hostAdminEdits({stream:true});
+ const frame=host.machine._onlineCampaign.state.frame;
  for(let n=0;n<50;n++){host.tick();await flush();}
  assert.ok(host.machine._onlineCampaign.state.frame-frame>100,'host streaming advances without guest simulation acknowledgements or callbacks');
  assert.equal(guest.machine,undefined);assert.equal(guest.draws,0);
@@ -206,7 +302,7 @@ if(scenario==='host-stream'){
  assert.equal(host.e.get('start-btn').disabled,false);assert.match(host.e.get('menu-status').textContent,/1P - CAMPAIGN/);assert.equal(video.srcObject,null);assert.equal(video.hidden,true);assert.ok(channels.every(c=>c.readyState==='closed'));
  assert.equal(guest.machine,undefined);assert.equal(guest.e.get('join-online-btn').disabled,false);await guest.e.get('join-online-btn').click();assert.equal(guest.e.get('online-room-dialog').open,true,'a guest without a ROM can join another room after Quit');
  assert.equal(host.e.get('room-create-code').disabled,false,'the host may choose a key for the next room after Quit');
- db.sqlite.close();process.stdout.write(JSON.stringify({scenario,noGuestEmulator:true,videoAudio:true,remoteControls:true,noSimulationBackpressure:true,worldContinue:true,cleanQuit:true,streamPreferences:true,streamDiagnostics:true,pauseResume:true,customRoomKey:true}));
+ db.sqlite.close();process.stdout.write(JSON.stringify({scenario,noGuestEmulator:true,videoAudio:true,remoteControls:true,remoteDetonation:true,bombColorPreferences:true,hostAdmin:true,noSimulationBackpressure:true,worldContinue:true,cleanQuit:true,streamPreferences:true,streamDiagnostics:true,pauseResume:true,customRoomKey:true}));
 }else if(scenario==='player-departure'){
  // Losing a third player must invalidate the original three-person game even
  // if the two remaining peers are still connected and the server removes them.
@@ -397,6 +493,13 @@ const initial=await host.export();await flush();assert.equal(initial.session.mod
 for(const a of [host,guest]){a.machine.RAM.fill(0,0xd98,0xdb8);a.machine.RAM.fill(0,0xf9b,0xfb4);a.machine._levelObjective.state.enabled=false;a.machine.RAM[0x434]=31;a.machine.RAM[0x435]=21;for(let y=1;y<21;y++)for(let x=2;x<31;x++)a.machine.RAM[0x44a+y*32+x]=0xca;}
 const location=initial.session.companions.bots[1];for(const a of [host,guest]){const campaign=await a.load('dist/campaign.js');campaign.spawnItem(a.machine,1,Math.floor(location.x/16),Math.floor(location.y/16));}
 await advance(3);assert.equal(host.machine._sharedPowerups.state.counts[1],1);same(host.machine._sharedPowerups.state,guest.machine._sharedPowerups.state);
+assert.equal(host.machine._fixtureCompanions.bombColorsEnabled,false);assert.equal(guest.machine._fixtureCompanions.bombColorsEnabled,true,'separate-camera players keep independent presentation preferences');
+for(const a of [host,guest])for(const [i,actor]of a.machine._fixtureCompanions.state.bots.entries()){actor.x=i?184:56;actor.y=56;}
+await host.key('Space');await guest.key('Space');await advance(1);await host.key('Space',true);await guest.key('Space',true);
+for(const a of [host,guest]){const owned=a.machine._fixtureCompanions.state.bombColors;assert.ok(owned.includes('black')&&owned.includes('orange'),'colored bomb ownership is synchronized even when local rendering is disabled');}
+same(host.machine._fixtureCompanions.state,guest.machine._fixtureCompanions.state);
+await presentationOnlyBombPreference(host,true);await presentationOnlyBombPreference(host,false);await presentationOnlyBombPreference(guest,false);await presentationOnlyBombPreference(guest,true);
+await hostAdminEdits();
 await host.key('ArrowDown');await guest.key('ArrowRight');await advance(20);assert.equal(host.machine._onlineCampaign.state.inputs[1],2,JSON.stringify({status:host.status()+' / '+guest.status(),inputs:channels.flatMap(c=>c.sent.map(s=>JSON.parse(s)).filter(p=>p.type==='input')),boot:initial.session.boot}));await host.key('ArrowDown',true);await advance(190);await guest.key('ArrowRight',true);await advance(2);
 same(host.machine.RAM,guest.machine.RAM);assert.equal(host.machine.PC,guest.machine.PC);assert.equal(host.machine.A,guest.machine.A);assert.equal(host.machine.X,guest.machine.X);assert.equal(host.machine.S,guest.machine.S);assert.notDeepEqual(host.machine.ImageData.data.slice(684*64*4),guest.machine.ImageData.data.slice(684*64*4),'local arena cameras follow separate players without diverging CPU or RAM');
 const saved=await host.export();await flush();assert.ok(saved.session.companions.bots[0].y>initial.session.companions.bots[0].y+20,'host controls the first actor');assert.ok(saved.session.companions.bots[1].x>initial.session.companions.bots[1].x+200,'guest independently controls the second actor '+JSON.stringify({initial:initial.session.companions.bots.map(b=>({id:b.id,x:b.x,y:b.y})),later:saved.session.companions.bots.map(b=>({id:b.id,x:b.x,y:b.y,alive:b.alive,action:b.action})),inputs:host.machine._onlineCampaign.state.inputs}));assert.ok(saved.session.companions.bots.every(b=>b.bombCapacity===2),'a collected bomb upgrade reaches all humans');assert.equal(saved.session.sharedPowerups.counts[1],1);
@@ -405,7 +508,7 @@ await host.e.get('pause-btn').click();await flush();const paused=host.e.get('fra
 await host.e.get('room-leave').click();await guest.e.get('room-leave').click();await flush();
 // Import the exported checkpoint, retaining original player IDs/upgrades but
 // requesting world4 stage4, then exercise the actual fresh-level boot path.
-saved.state.RAM[0x84a]=3;saved.state.RAM[0x84b]=3;saved.session.onlineRoom.revision='0.4.0';const saveModule=await host.load('dist/save-state.js'),checkpoint=await saveModule.encodeSave(saved);
+saved.state.RAM[0x84a]=3;saved.state.RAM[0x84b]=3;saved.session.onlineRoom.revision='0.4.7';delete saved.session.companions.bombColors;delete saved.session.bosses;const saveModule=await host.load('dist/save-state.js'),checkpoint=await saveModule.encodeSave(saved);
 await host.e.get('save-input').listeners.change({target:{files:[checkpoint],value:'x'}});assert.match(host.e.get('save-status').textContent,/Online save selected/);assert.match(host.e.get('room-checkpoint').textContent,/level 4-4/);
 assertColorUI(host,'black');
 await guest.e.get('open-menu-btn').click();for(let i=0;i<110;i++)guest.tick();await guest.key('ArrowDown');await guest.key('ArrowDown');await guest.key('Enter');await guest.key('ArrowDown');await guest.key('Enter');await join();await synchronize();await advance(3);
@@ -422,10 +525,13 @@ await bh.e.get('room-start').click();for(let n=0;n<700&&bg.e.get('online-room-di
 assert.equal(bg.e.get('online-room-dialog').open,false,bh.status()+bg.status());
 assertColorUI(bh,'black',{disabled:true});assertColorUI(bg,'orange',{disabled:true});
 const pad={connected:true,id:'Fixture standard',mapping:'standard',index:0,axes:[-1,0],buttons:Array.from({length:17},()=>({pressed:false,touched:false,value:0}))};bg.context.navigator.getGamepads=()=>[pad];
-for(let n=0;n<45;n++){bh.tick();await flush();bg.tick();await flush();assert.doesNotMatch(bh.status()+bg.status(),/Emulation stopped|states differ|frame order/);}
+await bh.key('Space');await bg.key('Space');for(let n=0;n<3;n++){bh.tick();await flush();bg.tick();await flush();}await bh.key('Space',true);await bg.key('Space',true);
+for(const a of [bh,bg]){assert.ok(a.machine.RAM.slice(0x84f,0x877).some(flags=>flags&128),'online Battle places a synchronized native bomb');assert.deepEqual(Array.from(a.machine._fixtureCompanions.state.bombColors),Array(40).fill(null),'campaign owner metadata does not capture native Battle bombs');}
+for(let n=0;n<130;n++){bh.tick();await flush();bg.tick();await flush();assert.doesNotMatch(bh.status()+bg.status(),/Emulation stopped|states differ|frame order/);}
+for(const a of [bh,bg])assert.deepEqual(Array.from(a.machine._fixtureCompanions.state.bombColors),Array(40).fill(null),'Battle preferences cannot change owner metadata through a checksum interval');
 same(bh.machine.RAM,bg.machine.RAM);assert.equal(bh.machine.PC,bg.machine.PC);const battleSave=await bh.export();await flush();const guestBattle=await bg.export();await flush();assert.equal(battleSave.session.mode,'online-battle');assert.deepEqual(Array.from(battleSave.session.battleColors),['black','orange']);assert.deepEqual(Array.from(guestBattle.session.battleColors),['black','orange']);
 assert.ok(channels.some(c=>c.sent.some(s=>{const p=JSON.parse(s);return p.type==='input'&&p.mask===8;})),'physical guest controller is sent through the network mask');
 await bh.e.get('room-leave').click();await bg.e.get('room-leave').click();db.sqlite.close();
-process.stdout.write(JSON.stringify({players:2,sharedUpgrades:true,cameraViews:true,restartLevel:'4-4',remoteReleased:true,battleControllers:true,frames:saved.session.onlineCampaign.frame,httpRequests:requests.length}));
+process.stdout.write(JSON.stringify({players:2,sharedUpgrades:true,cameraViews:true,bombColorPreferences:true,hostAdmin:true,restartLevel:'4-4',remoteReleased:true,battleControllers:true,battleBombs:true,frames:saved.session.onlineCampaign.frame,httpRequests:requests.length}));
 }
 }

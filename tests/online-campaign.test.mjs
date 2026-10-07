@@ -3,6 +3,7 @@ import {createMachine,frames} from '../scripts/headless.mjs';
 import {createCompanions,companionBombSlots,spawnItem,DEATH_FRAMES,tileKind} from '../dist/campaign.js';
 import {createSpectator} from '../dist/spectator.js';
 import {createOnlineCampaign,validateOnlineCampaign,ONLINE_INPUT as I} from '../dist/online-campaign.js';
+import {createSharedPowerups} from '../dist/shared-powerups.js';
 import {launchSequence} from '../dist/battle-ai.js';
 const rom=process.env.BOMBERMAN_TEST_ROM;
 function arena(){
@@ -23,6 +24,32 @@ test('local camera changes only rendered coordinates and preserves native collis
  const p={RAM:ram,VDC:[v],_campaignTracker:{frame:0,last:0},MakeSpriteLine(){v.VDCStatus=1+(this.RAM[0x25]|this.RAM[0x26]<<8);views.push(['sprite',this.RAM.slice(0x25,0x29),satb[0],satb[1]]);},MakeBGLine(){views.push(['background',this.RAM.slice(0x25,0x29),v.VDCRegister[7],v.DrawBGLine]);}};
  const online=createOnlineCampaign(p,{getActors:()=>actors,getLocalID:()=>2});online.configure(true,[{id:1,color:'black'},{id:2,color:'red'}]);const before={ram:[...ram],satb:[...satb],bx:v.VDCRegister[7],by:v.DrawBGLine};p.MakeSpriteLine(0);p.MakeBGLine(0);
  assert.equal(views.length,3);assert.equal(v.VDCStatus,9,'hardware flags come from canonical sprite positions');assert.deepEqual(views[0][1],[8,0,0,0]);assert.notDeepEqual(views[1][1],views[0][1]);assert.deepEqual(views[2][1],views[1][1],'background overlays receive the same local scroll');assert.deepEqual(ram,before.ram);assert.deepEqual(satb,before.satb);assert.equal(v.VDCRegister[7],before.bx);assert.equal(v.DrawBGLine,before.by);
+});
+test('shared remote pickup detonates every owner bomb through native flames and cleanup',{skip:!rom},()=>{
+ const {p,crew,online,a,b}=arena(),shared=createSharedPowerups(p,{getActors:()=>crew.state.bots,getHuman:()=>null});shared.configure(true);let frame=0;
+ const step=(masks,n=1)=>{for(let j=0;j<n;j++){online.setInputs(frame++,masks);shared.update();online.update();crew.update();p.Run();}};
+ const active=actor=>companionBombSlots(actor).filter(slot=>p.RAM[0x84f+slot]&128);
+ const finishes=(masks,slots,cells)=>{
+  const flames=new Set();
+  for(let j=0;j<120;j++){
+   step(j===0?masks:[0,0]);
+   cells.forEach(([x,y],i)=>{if([6,11,12].includes(tileKind(p,x,y)))flames.add(i);});
+  }
+  assert.equal(flames.size,cells.length,'every released bomb creates native flame tiles');
+  for(const slot of slots)assert.equal(p.RAM[0x84f+slot],0,'native explosion completes and frees the bomb slot');
+  for(const [x,y]of cells)assert.equal(tileKind(p,x,y),10,'native flame cleanup restores bomb centers to floor');
+ };
+ spawnItem(p,2,3,3);step([0,0]);assert.equal(a.remote,true);assert.equal(b.remote,true,'one remote pickup benefits both online humans');assert.equal(shared.state.counts[2],1);
+ a.bombCapacity=2;b.x=168;step([I.BOMB,I.BOMB]);const bSlots=active(b);
+ a.x=88;a.y=88;b.x=168;b.y=152;step([0,0]);step([I.BOMB,0]);const aSlots=active(a);
+ assert.equal(aSlots.length,2);assert.equal(bSlots.length,1);assert.ok(aSlots.every(slot=>!bSlots.includes(slot)),'players retain independent bomb banks');
+ a.x=56;a.y=152;step([0,0],180);
+ for(const slot of [...aSlots,...bSlots]){assert.equal(p.RAM[0x917+slot],255);assert.ok(p.RAM[0x8ef+slot]>100,'remote bombs wait beyond their ordinary fuse');}
+ finishes([I.REMOTE,0],aSlots,[[3,3],[5,5]]);
+ assert.deepEqual(active(b),bSlots,'the first player does not release the second player bombs');assert.equal(p.RAM[0x917+bSlots[0]],255);assert.ok(p.RAM[0x8ef+bSlots[0]]>100);
+ finishes([0,I.REMOTE],bSlots,[[10,3]]);
+ a.x=56;a.y=56;step([I.BOMB,0]);const reused=active(a);assert.equal(reused[0],aSlots[0],'a finished slot can be reused');assert.equal(online.state.released[reused[0]],false,'a new remote bomb starts held');a.y=152;step([0,0],180);assert.equal(p.RAM[0x917+reused[0]],255);assert.ok(p.RAM[0x8ef+reused[0]]>100);
+ finishes([I.REMOTE,0],reused,[[3,3]]);
 });
 test('remote humans pass teammates, respect terrain, collect, bomb, die and clear through native transitions',{skip:!rom},()=>{
  const {p,crew,watch,online,a,b}=arena();const extras=[[2,9],[4,9],[6,9]].map(([x,y])=>crew.add(x,y));const fifth=extras.at(-1);online.configure(true,crew.state.bots.map(actor=>({id:actor.id,color:actor.color})));assert.deepEqual(companionBombSlots(fifth),[0,1,2,3,4]);online.setInputs(0,[0,0,0,0,I.BOMB]);online.control(fifth);assert.equal(p.RAM[0x84f],128,'fifth remote human uses ordinary native bomb slots');assert.equal(crew.state.bombRanges[0],1);p.Run();assert.ok(p.PaletteData[624],'fifth actor has an isolated palette');crew.state.bots=[a,b];for(let i=0;i<40;i++)p.RAM[0x84f+i]=0;p.RAM[0x44a+9*32+6]=0xca;online.configure(true,[{id:a.id,color:a.color},{id:b.id,color:b.color}]);let frame=0;

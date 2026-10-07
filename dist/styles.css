@@ -25,3 +25,5 @@ canvas{aspect-ratio:4/3;object-fit:fill}canvas:fullscreen{height:100%;width:100%
 @media(max-width:480px){.color-options{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 #stream-video{display:block;width:100%;max-width:684px;aspect-ratio:4/3;object-fit:fill;background:#101b25;image-rendering:pixelated}#stream-video:focus-visible{outline:3px solid #dc753e;outline-offset:-3px}#stream-video:fullscreen{height:100%;width:100%;max-width:none;object-fit:contain}#room-transport{width:100%;padding:10px;margin-top:8px;border:1px solid var(--line);border-radius:4px;background:var(--surface)}#online-health{margin:8px 18px}
+
+.bomb-color-setting{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12px;cursor:pointer}.bomb-color-setting input{width:16px;height:16px;flex:none;accent-color:var(--orange)}.bomb-color-setting:has(input:disabled){cursor:default;color:var(--muted)}

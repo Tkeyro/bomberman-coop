@@ -62,7 +62,10 @@ export function createOnlineCampaign(p,{getActors=()=>[],getLocalID=()=>null}={}
   const input=state.inputs[i]??0,pressed=input&~(state.previous[i]??0),slots=companionBombSlots(actor);
   for(const slot of slots){
    if(!(p.RAM[0x84f+slot]&128)||p.RAM[0x917+slot]!==255){state.released[slot]=false;continue;}
-   if(actor.remote){if(pressed&ONLINE_INPUT.REMOTE)state.released[slot]=true;p.RAM[0x8ef+slot]=state.released[slot]?1:150;}
+   // The native fuse reaches zero one frame before its explosion starts.
+   // Leave zero intact so holding or releasing the remote button cannot
+   // restart that fuse and keep the bomb stuck in its idle animation.
+   if(actor.remote&&p.RAM[0x8ef+slot]!==0){if(pressed&ONLINE_INPUT.REMOTE)state.released[slot]=true;p.RAM[0x8ef+slot]=state.released[slot]?1:150;}
   }
   const tx=Math.floor(actor.x/16),ty=Math.floor(actor.y/16);
   if(pressed&ONLINE_INPUT.BOMB){
