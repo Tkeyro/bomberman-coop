@@ -49,15 +49,17 @@ class Channel extends EventTarget{
  close(){if(this.readyState==='closed')return;this.readyState='closed';this.onclose?.();this.remote?.close();}
 }
 class Peer{
- constructor(){this.id='peer-'+(++peerSerial);this.connectionState='new';this.localDescription=null;this.remoteDescription=null;this.candidates=[];this.senders=[];peers.set(this.id,this);}
+ constructor(){this.id='peer-'+(++peerSerial);this.connectionState='new';this.localDescription=null;this.remoteDescription=null;this.candidates=[];this.senders=[];this.receivers=[];this.statsFrame=0;peers.set(this.id,this);}
  addTrack(track,stream){const sender={track,stream,parameters:{encodings:[{}]},getParameters(){return structuredClone(this.parameters);},async setParameters(value){this.parameters=structuredClone(value);}};this.senders.push(sender);return sender;}
+ getReceivers(){return [...this.receivers];}
+ async getStats(){const frames=++this.statsFrame*60,reports=new Map([['transport',{id:'transport',type:'transport',selectedCandidatePairId:'pair'}],['pair',{id:'pair',type:'candidate-pair',currentRoundTripTime:.02}]]);for(const receiver of this.receivers){const video=receiver.track.kind==='video',id='inbound-'+receiver.track.kind;reports.set(id,{id,type:'inbound-rtp',kind:receiver.track.kind,timestamp:this.statsFrame*1000,jitterBufferDelay:frames*(video ? .012 : .008),jitterBufferEmittedCount:frames,framesDecoded:video?frames:undefined,totalDecodeTime:video?frames*.002:undefined,framesPerSecond:video?60:undefined});}for(const sender of this.senders)if(sender.track.kind==='video')reports.set('outbound-video',{id:'outbound-video',type:'outbound-rtp',kind:'video',timestamp:this.statsFrame*1000,framesEncoded:frames,totalEncodeTime:frames*.003,framesPerSecond:60,qualityLimitationReason:'bandwidth'});return reports;}
  createDataChannel(label,options){assert.equal(options.ordered,true);return this.channel=new Channel(label);}
  async createOffer(){return {type:'offer',sdp:this.id};}
  async createAnswer(){return {type:'answer',sdp:this.id};}
  async setLocalDescription(description){this.localDescription=description;queueMicrotask(()=>this.connectionState!=='closed'&&this.onicecandidate?.({candidate:{candidate:'ice:'+this.id,toJSON(){return {candidate:this.candidate};}}}));this.connect();}
  async setRemoteDescription(description){assert.ok(peers.has(description.sdp));this.remoteDescription=description;this.connect();}
  async addIceCandidate(candidate){this.candidates.push(candidate);this.connect();}
- connect(){const other=peers.get(this.remoteDescription?.sdp);if(!other||!this.localDescription||!other.localDescription||!this.candidates.length||!other.candidates.length)return;const host=this.channel?this:other,guest=host===this?other:this;if(host.channel.remote)return;const channel=new Channel(host.channel.label);host.channel.remote=channel;channel.remote=host.channel;guest.channel=channel;guest.ondatachannel?.({channel});for(const p of [host,guest])p.connectionState='connected';for(const sender of host.senders)queueMicrotask(()=>guest.connectionState!=='closed'&&guest.ontrack?.({track:sender.track,streams:[sender.stream]}));for(const c of [host.channel,channel]){c.readyState='open';queueMicrotask(()=>c.onopen?.());}}
+ connect(){const other=peers.get(this.remoteDescription?.sdp);if(!other||!this.localDescription||!other.localDescription||!this.candidates.length||!other.candidates.length)return;const host=this.channel?this:other,guest=host===this?other:this;if(host.channel.remote)return;const channel=new Channel(host.channel.label);host.channel.remote=channel;channel.remote=host.channel;guest.channel=channel;guest.ondatachannel?.({channel});for(const p of [host,guest])p.connectionState='connected';for(const sender of host.senders){const receiver={track:sender.track,jitterBufferTarget:50,playoutDelayHint:.05};guest.receivers.push(receiver);queueMicrotask(()=>guest.connectionState!=='closed'&&guest.ontrack?.({track:sender.track,streams:[sender.stream],receiver}));}for(const c of [host.channel,channel]){c.readyState='open';queueMicrotask(()=>c.onopen?.());}}
  close(){this.connectionState='closed';this.channel?.close();}
 }
 async function app(name,id,color,gameMode='campaign',players=2,{rom=true}={}){
@@ -142,6 +144,8 @@ if(scenario==='host-stream'){
  await guest.e.get('mute-btn').click();assert.equal(video.muted,true);await guest.e.get('mute-btn').click();assert.equal(video.muted,false,'a guest can mute and unmute without a native machine');
  await guest.e.get('player-count-select').listeners.change({target:{value:'3'}});assert.equal(guest.machine,undefined,'the inactive native count picker is safe in a no-ROM guest');
  assert.ok(canvas.captures.some(c=>c.fps===60));assert.ok([...peers.values()].some(p=>p.senders.some(s=>s.track.kind==='video'&&s.parameters.encodings[0].maxBitrate===2500000)),'transport applies its optional video rate limit');
+ assert.ok([...peers.values()].some(p=>p.senders.some(s=>s.track.kind==='video'&&s.parameters.degradationPreference==='maintain-framerate')),'the stream sender prefers timely frames when the encoder must adapt');
+ const receivers=[...peers.values()].flatMap(p=>p.receivers);assert.equal(receivers.length,2);assert.ok(receivers.every(receiver=>receiver.jitterBufferTarget===0),'supported video and audio receivers request minimum additional buffering');
  for(const id of ['save-btn','export-save-btn','admin-btn'])assert.equal(guest.e.get(id).disabled,true,`${id} belongs to the emulator host`);
  for(const a of [host,guest]){await a.e.get('join-online-btn').click();assert.equal(a.e.get('online-room-dialog').open,false,'Join cannot replace a playing session with the lobby phase');assert.equal(a.e.get('pause-btn').textContent,'Pause');}
  const actors=new Map(),control=host.machine._onlineCampaign.control;
@@ -151,6 +155,12 @@ if(scenario==='host-stream'){
  const before=actors.get(2).x;await guest.key('ArrowRight');
  for(let n=0;n<12;n++){host.tick();await flush();}
  await guest.key('ArrowRight',true);assert.ok(actors.get(2).x>before+15,'streamed guest controls move only the host actor');
+ await guest.e.get('pause-btn').click();await flush();for(const a of [host,guest])assert.equal(a.e.get('pause-btn').textContent,'Resume','a streamed guest can pause the shared game');
+ const pausedFrame=host.machine._onlineCampaign.state.frame;await advance(3);assert.equal(host.machine._onlineCampaign.state.frame,pausedFrame,'the host emulator remains paused');
+ assert.equal(video.srcObject.getVideoTracks()[0].readyState,'live','Pause keeps the existing media connection');await guest.e.get('pause-btn').click();await flush();for(const a of [host,guest])assert.equal(a.e.get('pause-btn').textContent,'Pause','a streamed guest can request Resume');
+ await advance(45);assert.ok(host.machine._onlineCampaign.state.frame>pausedFrame);assert.equal(guest.machine,undefined,'Pause and Resume do not create a guest emulator');
+ assert.match(guest.e.get('online-health').textContent,/60 video FPS/);assert.match(guest.e.get('online-health').textContent,/20 ms round trip/);assert.match(guest.e.get('online-health').textContent,/Video buffer 12 ms/);assert.match(guest.e.get('online-health').textContent,/Decode 2 ms/);
+ assert.match(host.e.get('online-health').textContent,/Encode 3 ms/);assert.match(host.e.get('online-health').textContent,/Encoder limited by bandwidth/);
  const remote=actors.get(2);remote.x=Math.floor(remote.x/16)*16+8;remote.y=Math.floor(remote.y/16)*16+8;
  campaign.spawnItem(host.machine,1,Math.floor(remote.x/16),Math.floor(remote.y/16));await advance(2);assert.equal(host.machine._sharedPowerups.state.counts[1],1,'streamed teams still share upgrades');
  const bombs=remote.bombsPlaced;await guest.key('Space');await advance(1);await guest.key('Space',true);assert.equal(remote.bombsPlaced,bombs+1,'streamed guest bomb input reaches the authoritative emulator');assert.ok(campaign.bombs(host.machine).length>0);
@@ -181,7 +191,7 @@ if(scenario==='host-stream'){
  await defeatStreamTeam();await host.key('ArrowDown');await host.key('Enter');await flush();for(let n=0;n<130&&host.e.get('start-btn').disabled;n++)await advance(1);
  assert.equal(host.e.get('start-btn').disabled,false);assert.match(host.e.get('menu-status').textContent,/1P - CAMPAIGN/);assert.equal(video.srcObject,null);assert.equal(video.hidden,true);assert.ok(channels.every(c=>c.readyState==='closed'));
  assert.equal(guest.machine,undefined);assert.equal(guest.e.get('join-online-btn').disabled,false);await guest.e.get('join-online-btn').click();assert.equal(guest.e.get('online-room-dialog').open,true,'a guest without a ROM can join another room after Quit');
- db.sqlite.close();process.stdout.write(JSON.stringify({scenario,noGuestEmulator:true,videoAudio:true,remoteControls:true,noSimulationBackpressure:true,worldContinue:true,cleanQuit:true}));
+ db.sqlite.close();process.stdout.write(JSON.stringify({scenario,noGuestEmulator:true,videoAudio:true,remoteControls:true,noSimulationBackpressure:true,worldContinue:true,cleanQuit:true,streamPreferences:true,streamDiagnostics:true,pauseResume:true}));
 }else if(scenario==='player-departure'){
  // Losing a third player must invalidate the original three-person game even
  // if the two remaining peers are still connected and the server removes them.

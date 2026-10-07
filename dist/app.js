@@ -43,7 +43,22 @@ function updateOnlineHealth(now){
  const generation=onlineHealthGeneration,room=onlineRoom,code=room.room?.code;
  const queue=streaming()?room.host?'Host streaming · shared camera':'Receiving host video · shared camera':room.host?`slowest player ${behind} frames behind`:`${behind} queued frames`,base=`${streamGuest()?'Video stream':fps+' FPS'} · ${queue}`;
  status.textContent=base;
- room.connectionStats().then(stats=>{if(generation!==onlineHealthGeneration||room!==onlineRoom||room.room?.code!==code||onlinePhase!=='play')return;status.textContent=`${streamGuest()?'Video stream':fps+' FPS'} · ${stats.rttMs===null?'timing unavailable':Math.round(stats.rttMs)+' ms round trip'} · ${queue}`;}).catch(()=>{});
+ room.connectionStats().then(stats=>{
+  if(generation!==onlineHealthGeneration||room!==onlineRoom||room.room?.code!==code||onlinePhase!=='play'||onlineHealthTime!==now)return;
+  const media=stats.media,details=[],available=n=>Number.isFinite(n)&&n>=0;
+  let speed=streamGuest()?'Video stream':fps+' FPS';
+  if(media&&streamGuest()){
+   if(available(media.receiveFps))speed=Math.round(media.receiveFps)+' video FPS';
+   if(available(media.videoBufferMs))details.push('Video buffer '+Math.round(media.videoBufferMs)+' ms');
+   if(available(media.audioBufferMs))details.push('Audio buffer '+Math.round(media.audioBufferMs)+' ms');
+   if(available(media.decodeMs))details.push('Decode '+Math.round(media.decodeMs)+' ms');
+  }else if(media){
+   if(available(media.sendFps))details.push(Math.round(media.sendFps)+' sent video FPS');
+   if(available(media.encodeMs))details.push('Encode '+Math.round(media.encodeMs)+' ms');
+   if(media.qualityLimitationReason&&media.qualityLimitationReason!=='none')details.push('Encoder limited by '+media.qualityLimitationReason);
+  }
+  status.textContent=[speed,stats.rttMs===null?'network timing unavailable':Math.round(stats.rttMs)+' ms round trip',queue,...details].join(' · ');
+ }).catch(()=>{});
 }
 function waitForOnlinePeer(waiting){if(waiting===onlineWaiting)return;onlineWaiting=waiting;$('menu-status').textContent=waiting?'Waiting for a player to catch up…':'';}
 function hostCanAdvance(){return networkRoster.filter(p=>p.id!==onlineRoom.playerId).every(p=>onlineSequence-(onlineProgress.get(p.id)??0)<ONLINE_MAX_LEAD)&&onlineRoom.writable();}

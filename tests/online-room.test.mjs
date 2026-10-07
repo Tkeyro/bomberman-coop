@@ -57,8 +57,9 @@ function peerNetwork(){
   close(){if(this.readyState==='closed')return;this.readyState='closed';this.onclose?.();if(this.remote?.readyState!=='closed')this.remote?.close();}
  }
  class Peer{
-  constructor(config){this.id=`peer-${++serial}`;this.config=config;this.localDescription=null;this.remoteDescription=null;this.candidates=[];this.connectionState='new';this.senders=[];peers.set(this.id,this);}
-  addTrack(track,stream){assert.equal(this.localDescription,null,'media tracks are attached before the initial offer');const sender={track,stream,parameters:null,getParameters:()=>({encodings:[{}]}),async setParameters(value){sender.parameters=value;}};this.senders.push(sender);return sender;}
+  constructor(config){this.id=`peer-${++serial}`;this.config=config;this.localDescription=null;this.remoteDescription=null;this.candidates=[];this.connectionState='new';this.senders=[];this.receivers=[];peers.set(this.id,this);}
+  addTrack(track,stream){assert.equal(this.localDescription,null,'media tracks are attached before the initial offer');const sender={track,stream,parameters:null,getParameters:()=>structuredClone(sender.parameters??{encodings:[{}]}),async setParameters(value){sender.parameters=value;}};this.senders.push(sender);return sender;}
+  getReceivers(){return this.receivers;}
   createDataChannel(label,options){assert.equal(options.ordered,true);return this.channel=new Channel(label);}
   async createOffer(){this.offeredTracks=this.senders.map(sender=>sender.track);await Promise.resolve();return {type:'offer',sdp:this.id};}
   async createAnswer(){await Promise.resolve();return {type:'answer',sdp:this.id};}
@@ -70,7 +71,7 @@ function peerNetwork(){
   connect(){const remote=peers.get(this.remoteDescription?.sdp);if(!remote||!this.localDescription||!remote.localDescription||!this.candidates.length||!remote.candidates.length)return;
    const host=this.channel?this:remote,guest=host===this?remote:this;if(host.channel.remote)return;
    const receive=new Channel(host.channel.label);host.channel.remote=receive;receive.remote=host.channel;guest.channel=receive;guest.ondatachannel?.({channel:receive});
-   for(const sender of host.senders)guest.ontrack?.({track:sender.track,streams:[sender.stream]});
+   for(const sender of host.senders){const receiver={track:sender.track,jitterBufferTarget:50};guest.receivers.push(receiver);guest.ontrack?.({track:sender.track,streams:[sender.stream],receiver});}
    for(const p of [host,guest])p.connectionState='connected';for(const c of [host.channel,receive]){c.readyState='open';queueMicrotask(()=>c.onopen?.());}
   }
   close(){this.connectionState='closed';this.channel?.close();}
@@ -146,8 +147,9 @@ test('host streaming negotiates video and audio in the initial offer while contr
  await host.client.create({name:'Host',color:'black',transport:'stream'});await guest.client.join('ABC123',{name:'Guest',color:'orange'});await third.client.join('ABC123',{name:'Third',color:'red'});await f.settle();
  assert.equal(host.client.connected(),true);assert.equal(guest.client.connected(),true);assert.equal(third.client.connected(),true);
  const outgoing=[...f.network.peers.values()].filter(peer=>peer.localDescription.type==='offer');assert.equal(outgoing.length,2);
- for(const peer of outgoing){assert.deepEqual(peer.offeredTracks,[video,audio]);assert.ok(peer.senders.every(sender=>sender.stream===stream));assert.deepEqual(peer.senders[0].parameters,{encodings:[{maxBitrate:2500000,maxFramerate:60}]});assert.equal(peer.senders[1].parameters,null,'video limits do not apply to audio');}
+ for(const peer of outgoing){assert.deepEqual(peer.offeredTracks,[video,audio]);assert.ok(peer.senders.every(sender=>sender.stream===stream));assert.deepEqual(peer.senders[0].parameters,{encodings:[{maxBitrate:2500000,maxFramerate:60}],degradationPreference:'maintain-framerate'});assert.equal(peer.senders[1].parameters,null,'video limits do not apply to audio');}
  for(const member of [guest,third]){assert.equal(member.events.media.length,2);assert.ok(member.events.media.every(event=>event.from===host.id));assert.deepEqual(member.events.media.at(-1).stream.getTracks(),[video,audio]);assert.ok(member.events.media.every(event=>event.stream===member.events.media[0].stream),'audio and video reuse one receiver stream');}
+ for(const peer of [...f.network.peers.values()].filter(peer=>peer.localDescription.type==='answer')){assert.equal(peer.receivers.length,2);assert.ok(peer.receivers.every(receiver=>receiver.jitterBufferTarget===0),'both video and audio request minimum playback buffering');}
  assert.ok([...f.network.peers.values()].filter(peer=>peer.localDescription.type==='answer').every(peer=>peer.senders.length===0),'guests do not capture or send media');assert.equal(host.events.media.length,0);
  assert.equal(guest.client.toHost({type:'input',mask:5}),true);assert.equal(host.client.broadcast({type:'stream-start',level:{world:3,area:0}}),true);await flush();assert.equal(host.events.data.at(-1).packet.mask,5);assert.equal(guest.events.data.at(-1).packet.type,'stream-start');assert.equal(host.events.errors.length+guest.events.errors.length+third.events.errors.length,0);
  await host.client.leave();assert.equal(video.stops+audio.stops,0,'the media controller owns the source tracks; transport leave only closes peers');
@@ -196,6 +198,22 @@ test('connection diagnostics tolerate unsupported, rejected, invalid and stale b
  assert.deepEqual(await host.client.connectionStats(),{rttMs:null,sampledPeers:0,connectedPeers:1});peer.getStats=async()=>{throw new Error('Stats unavailable.');};assert.equal((await host.client.connectionStats()).rttMs,null);
  for(const seconds of [undefined,-1,NaN,Infinity,'0.04']){peer.getStats=async()=>new Map([['transport',{type:'transport',selectedCandidatePairId:'pair'}],['pair',{type:'candidate-pair',currentRoundTripTime:seconds}]]);assert.equal((await host.client.connectionStats()).rttMs,null);}
  const hold=deferred();peer.getStats=()=>hold.promise;const pending=host.client.connectionStats();await guest.client.leave();await host.client.poll();hold.resolve(new Map([['transport',{type:'transport',selectedCandidatePairId:'pair'}],['pair',{type:'candidate-pair',currentRoundTripTime:0.04}]]));assert.deepEqual(await pending,{rttMs:null,sampledPeers:0,connectedPeers:0});assert.equal(host.events.errors.length,0);
+});
+
+test('stream diagnostics share an in-flight browser read and report recent buffer and codec costs',async t=>{
+ const f=fixture(t),stream=new FakeStream([mediaTrack('video')]),host=f.member('host-player-00001',{getHostStream:()=>stream}),guest=f.member('guest-player-0001');
+ await host.client.create({name:'Host',color:'black',transport:'stream'});await guest.client.join('ABC123',{name:'Guest',color:'orange'});await f.settle();
+ const hostPeer=[...f.network.peers.values()].find(peer=>peer.localDescription.type==='offer'),guestPeer=[...f.network.peers.values()].find(peer=>peer.localDescription.type==='answer');
+ const report=(type,timestamp,frames)=>new Map([
+  ['transport',{type:'transport',selectedCandidatePairId:'pair'}],['pair',{type:'candidate-pair',currentRoundTripTime:.025}],
+  ['video',{id:'video',type,kind:'video',ssrc:42,timestamp,framesEncoded:frames,totalEncodeTime:frames*.003,framesDecoded:frames,totalDecodeTime:frames*.002,jitterBufferEmittedCount:frames,jitterBufferDelay:frames*.012,qualityLimitationReason:'none'}]
+ ]);
+ const hold=deferred();let reads=0;hostPeer.getStats=()=>{reads++;return hold.promise;};
+ const first=host.client.connectionStats(),concurrent=host.client.connectionStats();assert.equal(reads,1,'overlapping status requests use one coherent interval sample');
+ hold.resolve(report('outbound-rtp',1000,60));const baseline=await first;assert.deepEqual(await concurrent,baseline);assert.equal(baseline.rttMs,25);assert.equal(baseline.media.encodeMs,null,'first report has no prior interval');
+ hostPeer.getStats=async()=>report('outbound-rtp',2000,120);const sent=await host.client.connectionStats();assert.equal(sent.media.sendFps,60);assert.ok(Math.abs(sent.media.encodeMs-3)<1e-8);
+ guestPeer.getStats=async()=>report('inbound-rtp',1000,60);await guest.client.connectionStats();guestPeer.getStats=async()=>report('inbound-rtp',2000,120);
+ const received=await guest.client.connectionStats();assert.equal(received.media.receiveFps,60);assert.ok(Math.abs(received.media.videoBufferMs-12)<1e-8);assert.ok(Math.abs(received.media.decodeMs-2)<1e-8);assert.equal(received.media.audioBufferMs,null);
 });
 test('signal provenance rejects strangers and guest offers while the same player can leave and rejoin',async t=>{
  const f=fixture(t),{host,guest}=await f.pair(),third=f.member('third-player-0001');await third.client.join('ABC123',{name:'Third',color:'red'});await f.settle();

@@ -40,5 +40,5 @@ test('zero-life online campaign offers a host choice to restart its world or qui
 });
 
 test('host streaming runs only the host emulator while a guest without a ROM receives media and controls its own actor',{skip:!process.env.BOMBERMAN_TEST_ROM,timeout:150000},async()=>{
- const result=await probe('host-stream');assert.equal(result.noGuestEmulator,true);assert.equal(result.videoAudio,true);assert.equal(result.remoteControls,true);assert.equal(result.noSimulationBackpressure,true);assert.equal(result.worldContinue,true);assert.equal(result.cleanQuit,true);
+ const result=await probe('host-stream');assert.equal(result.noGuestEmulator,true);assert.equal(result.videoAudio,true);assert.equal(result.remoteControls,true);assert.equal(result.noSimulationBackpressure,true);assert.equal(result.worldContinue,true);assert.equal(result.cleanQuit,true);assert.equal(result.streamPreferences,true);assert.equal(result.streamDiagnostics,true);assert.equal(result.pauseResume,true);
 });

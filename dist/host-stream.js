@@ -29,7 +29,7 @@ export function createHostStream({canvas,video,getMachine=()=>null,onStatus=()=>
    capture=canvas.captureStream(60);
    const tracks=capture.getVideoTracks().filter(track=>track.readyState!=='ended');
    if(!tracks.length)throw new Error('The game canvas did not provide a video stream.');
-   for(const track of tracks)try{track.contentHint='detail';}catch{}
+   for(const track of tracks)try{track.contentHint='motion';}catch{}
    stream=new Stream(tracks);
    const machine=getMachine(),context=machine?.WebAudioCtx,source=machine?.WebAudioJsNode;
    let hasAudio=false;
@@ -57,9 +57,13 @@ export function createHostStream({canvas,video,getMachine=()=>null,onStatus=()=>
  }
  function receive(incoming){
   if(!video)throw new Error('The streamed game video element is missing.');
-  playback++;video.autoplay=true;video.playsInline=true;video.srcObject=incoming;setMuted(muted);
+  video.autoplay=true;video.playsInline=true;
+  // Audio and video track callbacks reuse one aggregate stream. Keep that
+  // stream attached instead of restarting playback when its audio arrives.
+  const changed=video.srcObject!==incoming;
+  if(changed){playback++;video.srcObject=incoming;}setMuted(muted);
   if(!unlocked&&!muted&&incoming?.getAudioTracks().length)onStatus('Click the game screen to enable streamed audio.');
-  void play();
+  if(changed)void play();
  }
  async function unlock(){
   unlocked=true;setMuted(muted);

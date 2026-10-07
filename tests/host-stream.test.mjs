@@ -29,7 +29,7 @@ function fixture({audio=true}={}){
 test('host capture streams only the canvas and game audio before local mute, and cleanup preserves native audio',async()=>{
  const f=fixture(),stream=f.controller.startHost();
  assert.deepEqual(f.canvas.rates,[60]);assert.equal(stream,f.controller.state.stream);
- assert.deepEqual(stream.getTracks(),[f.videoTrack,f.audioTrack]);assert.equal(f.videoTrack.contentHint,'detail');
+ assert.deepEqual(stream.getTracks(),[f.videoTrack,f.audioTrack]);assert.equal(f.videoTrack.contentHint,'motion');
  assert.equal(f.gain.gain.value,.6);assert.equal(f.localGain.gain.value,0);assert.equal(f.machine.WaveVolume,0);
  assert.deepEqual(f.connections,new Set([f.localGain,f.gain]));assert.equal(f.gain.destination,f.destination);
  assert.equal(f.canvas.hidden,false);assert.equal(f.video.hidden,true);assert.equal(f.controller.state.guestVisible,false);
@@ -74,4 +74,15 @@ test('autoplay failure prompts a gesture, allows retry, and ignores playback pro
  f.video.play=async()=>{};assert.equal(await f.controller.unlock(),true);
  let reject;f.video.play=()=>new Promise((_,r)=>{reject=r;});const pending=f.controller.play();
  f.controller.stop();const before=f.status.length;reject(new Error('late rejection'));assert.equal(await pending,false);assert.equal(f.status.length,before);
+});
+
+test('a later audio track reuses the attached stream without restarting video playback',()=>{
+ const f=fixture(),remote=new Stream([new Track('video')]);let value=null,assignments=0;
+ Object.defineProperty(f.video,'srcObject',{get:()=>value,set:next=>{value=next;assignments++;}});
+ f.controller.receive(remote);assert.equal(assignments,1);assert.equal(f.video.plays,1);
+ remote.addTrack(new Track('audio'));f.controller.receive(remote);
+ assert.equal(assignments,1);assert.equal(f.video.plays,1);assert.equal(f.video.srcObject,remote);
+ assert.match(f.status.at(-1),/enable streamed audio/);
+ const replacement=new Stream([new Track('video')]);f.controller.receive(replacement);
+ assert.equal(assignments,2);assert.equal(f.video.plays,2);assert.equal(f.video.srcObject,replacement);
 });
