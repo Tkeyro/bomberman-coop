@@ -30,6 +30,18 @@ export function bombs(p) {
 }
 export function pickups(p){const result=[];for(let slot=0;slot<25;slot++)if(p.RAM[0xf9b+slot]&128){const x=p.RAM[0xfb4+slot],y=p.RAM[0xfcd+slot];if(tileKind(p,x,y)===7)result.push({slot,type:p.RAM[0xf9b+slot]&31,x,y});}return result;}
 export const beneficialPickup=item=>item.type<=14&&item.type!==8;
+// Use the native sound queue and the ROM's priorities/channel masks.
+// Native steps use effect 1 (0x12 in world 2); death uses effect 4.
+function requestSound(p,id){
+ const read=offset=>p.Mapper.Read(4*8192+offset),priority=sound=>read(0xdc8+sound),pointer=read(0xde8+id*2)|(read(0xde9+id*2)<<8),mask=read(pointer&8191)&63,pending=p.RAM[0x1487];
+ if(!(pending&128)&&priority(id)<priority(pending))return;
+ for(let channel=0;channel<6;channel++)if((mask&(1<<channel))&&p.RAM[0x14f8+channel]&&priority(id)<priority(p.RAM[0x1480+channel]))return;
+ p.RAM[0x1487]=id;for(let channel=0;channel<6;channel++)if(mask&(1<<channel))p.RAM[0x1480+channel]=id;
+}
+export function restoreFloor(p,x,y,metadata=p.RAM[0x44a+y*32+x]&224){
+ const i=p.RAM[0x77],next=(i+1)&127;if(next===p.RAM[0x76])return false;
+ p.RAM[0x44a+y*32+x]=metadata|10;p.RAM[0xfe6+i]=x;p.RAM[0x1066+i]=y;p.RAM[0x10e6+i]=1;p.RAM[0x1166+i]=3;p.RAM[0x77]=next;return true;
+}
 const botWalkable=(p,x,y,bot)=>walkable(p,x,y)&&!(p._botSkullCells??new Set(pickups(p).filter(i=>i.type===8).map(i=>key(i.x,i.y)))).has(key(x,y))||(bot?.wallPass&&[2,3,4].includes(tileKind(p,x,y)))||(bot?.bombPass&&tileKind(p,x,y)===0);
 const solidFor=(kind,bot)=>[1,2,3,4,5].includes(kind)&&!(bot?.wallPass&&[2,3,4].includes(kind));
 export function enemies(p) {
@@ -57,10 +69,16 @@ function monsterCells(p,foes,radius=24){
  for(const e of foes)for(let y=Math.floor((e.y-radius)/16);y<=Math.floor((e.y+radius)/16);y++)for(let x=Math.floor((e.x-radius)/16);x<=Math.floor((e.x+radius)/16);x++)if(walkable(p,x,y)&&Math.abs(x*16+8-e.x)<radius&&Math.abs(y*16+8-e.y)<radius)cells.add(key(x,y));
  return cells;
 }
+function foreseeMonsters(p,foes,state){
+ const previous=new Map(state.foeMotion.map(e=>[e.slot,e]));
+ state.foeMotion=foes.map(e=>{const old=previous.get(e.slot),dx=old?e.x-old.x:0,dy=old?e.y-old.y:0,continuous=old&&old.type===e.type&&Math.abs(dx)<=2&&Math.abs(dy)<=2;return {...e,vx:continuous?old.vx*.6+dx*.4:0,vy:continuous?old.vy*.6+dy*.4:0};});
+ const predicted=[...foes];for(const e of state.foeMotion){if(Math.abs(e.vx)+Math.abs(e.vy)<.05)continue;let x=e.x,y=e.y;for(let t=8;t<=24;t+=8){const nx=x+e.vx*8,ny=y+e.vy*8;if(!walkable(p,Math.floor(nx/16),Math.floor(ny/16)))break;x=nx;y=ny;predicted.push({...e,x,y});}}
+ return predicted;
+}
 function attackCells(p,foes){const cells=new Set();for(const foe of foes){const queue=[{x:Math.floor(foe.x/16),y:Math.floor(foe.y/16),steps:0}],seen=new Set();for(let i=0;i<queue.length;i++){const n=queue[i],k=key(n.x,n.y);if(seen.has(k))continue;seen.add(k);cells.add(k);if(n.steps===3)continue;for(const [dx,dy]of NEIGHBORS)if(walkable(p,n.x+dx,n.y+dy))queue.push({x:n.x+dx,y:n.y+dy,steps:n.steps+1});}}return cells;}
 // Reconsider an interrupted step without cutting a corner through a block.
-function retreatRoute(p,bot,foes,danger,monsterDanger){
- const start={x:Math.floor(bot.x/16),y:Math.floor(bot.y/16)},clearance=monsterClearance(foes,bot.x,bot.y),unsafe=new Set([...danger,...monsterDanger]),blocked=monsterCells(p,foes,12);
+function retreatRoute(p,bot,foes,danger,monsterDanger,predicted=foes){
+ const start={x:Math.floor(bot.x/16),y:Math.floor(bot.y/16)},clearance=monsterClearance(foes,bot.x,bot.y),futureClearance=monsterClearance(predicted,bot.x,bot.y),unsafe=new Set([...danger,...monsterDanger]),blocked=monsterCells(p,foes,12);
  const escapingBomb=danger.has(key(start.x,start.y));
  if(!escapingBomb)for(const cell of danger)blocked.add(cell);
  for(let y=1;y<(p.RAM[0x435]||12);y++)for(let x=2;x<(p.RAM[0x434]||15);x++)if([6,11,12].includes(tileKind(p,x,y)))blocked.add(key(x,y));
@@ -78,7 +96,7 @@ function retreatRoute(p,bot,foes,danger,monsterDanger){
   if(!safe)continue;
   const tail=findPath(p,cell,n=>!unsafe.has(key(n.x,n.y)),{allowDanger:true,blocked,maxSteps:7,actor:bot}),prefix=distance>.01?[cell]:[];
   const separation=monsterClearance(foes,cell.x*16+8,cell.y*16+8);
-  if(tail){const route=[...prefix,...tail],score=distance/16+tail.length;if(!best||score<best.score||(score===best.score&&separation>best.separation))best={route,score,separation};}
+  if(tail&&(prefix.length||tail.length||futureClearance>=32)){const route=[...prefix,...tail],score=distance/16+tail.length;if(!best||score<best.score||(score===best.score&&separation>best.separation))best={route,score,separation};}
   if(prefix.length&&separation>clearance&&(!fallback||separation>fallback.separation))fallback={route:prefix,separation};
  }
  return best?.route??fallback?.route??[];
@@ -167,7 +185,7 @@ const DEATH_POSES=[
 const visibleBot=b=>b.alive||(Number.isInteger(b.deathFrame)&&b.deathFrame<DEATH_FRAMES);
 export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={}) {
  installCampaignTracker(p);
- const state={bots:[],stage:null,nextID:1,steps:0,events:[],active:false,bombRanges:Array(40).fill(0)};
+ const state={bots:[],stage:null,nextID:1,steps:0,events:[],active:false,bombRanges:Array(40).fill(0),foeMotion:[]};
  p._companionBombRanges=state.bombRanges;
  const paletteCache=new Map();
  const originalSpriteLine=p.MakeSpriteLine;
@@ -185,9 +203,9 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
  }
  function record(bot,text){state.events.push({frame:state.steps,bot:bot.id,text});if(state.events.length>40)state.events.shift();}
  function collect(bot,item){
-  const i=p.RAM[0x77],next=(i+1)&127;if(next===p.RAM[0x76]||!(p.RAM[0xf9b+item.slot]&128)||tileKind(p,item.x,item.y)!==7)return false;
-  p.RAM[0xf9b+item.slot]=0;const cell=0x44a+item.y*32+item.x;p.RAM[cell]=(p.RAM[cell]&224)|10;
-  p.RAM[0xfe6+i]=item.x;p.RAM[0x1066+i]=item.y;p.RAM[0x10e6+i]=1;p.RAM[0x1166+i]=3;p.RAM[0x77]=next;
+  if(!(p.RAM[0xf9b+item.slot]&128)||tileKind(p,item.x,item.y)!==7)return false;
+  const metadata=p._newCampaign?.enabled&&p._newCampaign.ready?0xc0:p.RAM[0x44a+item.y*32+item.x]&224;
+  if(!restoreFloor(p,item.x,item.y,metadata))return false;p.RAM[0xf9b+item.slot]=0;
   if(item.type===0)bot.fireRange=Math.min(5,bot.fireRange+1);if(item.type===1)bot.bombCapacity=Math.min(5,bot.bombCapacity+1);
   if(item.type===2)bot.remote=true;if(item.type===3)bot.speedUp=true;if(item.type===4)bot.bombPass=true;if(item.type===5)bot.wallPass=true;if(item.type===6)bot.fireproof=3600;if(item.type===7)bot.extraLives=Math.min(255,bot.extraLives+1);
   bot.pickupsCollected++;bot.target=null;bot.route=[];bot.action='Collected '+ITEM_CATALOG[item.type].name;record(bot,bot.action);return true;
@@ -195,19 +213,19 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
  function update() {
   if(!isCampaign(p)){state.active=false;return;}
   p._botSkullCells=new Set(pickups(p).filter(i=>i.type===8).map(i=>key(i.x,i.y)));
-  const stage=stageID(p);if(state.stage!==null&&state.stage!==stage){state.bots=state.bots.filter(b=>b.alive);const human=playerPosition(p),blocked=new Set([key(Math.floor(human.x/16),Math.floor(human.y/16))]);for(const b of state.bots){const cell=nearestFreeTile(p,{x:Math.floor(human.x/16),y:Math.floor(human.y/16)},blocked);b.x=cell.x*16+8;b.y=cell.y*16+8;b.target=null;b.route=[];blocked.add(key(cell.x,cell.y));}state.stage=stage;}
+  const stage=stageID(p);if(state.stage!==null&&state.stage!==stage){state.foeMotion=[];state.bots=state.bots.filter(b=>b.alive);const human=playerPosition(p),blocked=new Set([key(Math.floor(human.x/16),Math.floor(human.y/16))]);for(const b of state.bots){const cell=nearestFreeTile(p,{x:Math.floor(human.x/16),y:Math.floor(human.y/16)},blocked);b.x=cell.x*16+8;b.y=cell.y*16+8;b.target=null;b.route=[];blocked.add(key(cell.x,cell.y));}state.stage=stage;}
   for(const b of state.bots)if(!b.alive&&Number.isInteger(b.deathFrame)&&b.deathFrame<DEATH_FRAMES)b.deathFrame++;
   if((p.RAM[0x43a]&7)||p.RAM[0x437]){state.active=false;return;}
   state.active=true;
   state.steps++;
-  const danger=dangerCells(p),foes=enemies(p),monsterDanger=monsterCells(p,foes),allDanger=new Set([...danger,...monsterDanger]),attackZone=attackCells(p,foes),nowBombs=bombs(p);
+  const danger=dangerCells(p),foes=enemies(p),predicted=foreseeMonsters(p,foes,state),monsterDanger=monsterCells(p,predicted),allDanger=new Set([...danger,...monsterDanger]),attackZone=attackCells(p,foes),nowBombs=bombs(p);
   for(const bot of state.bots){
    if(!bot.alive&&bot.extraLives&&bot.deathFrame>=DEATH_FRAMES){const spot=findPath(p,{x:Math.floor(bot.x/16),y:Math.floor(bot.y/16)},n=>tileKind(p,n.x,n.y)===10&&!allDanger.has(key(n.x,n.y))&&!state.bots.some(b=>b.alive&&Math.floor(b.x/16)===n.x&&Math.floor(b.y/16)===n.y),{allowDanger:true,maxSteps:32});const cell=spot?.at(-1)??(spot?{x:Math.floor(bot.x/16),y:Math.floor(bot.y/16)}:null);if(cell){bot.x=cell.x*16+8;bot.y=cell.y*16+8;bot.extraLives--;bot.alive=true;bot.deathFrame=null;bot.target=null;bot.route=[];bot.fireproof=180;record(bot,'Used an extra life');}}
    if(!bot.alive)continue;
    if(bot.fireproof>0)bot.fireproof--;
    const tx=Math.floor(bot.x/16),ty=Math.floor(bot.y/16),kind=tileKind(p,tx,ty);
    if(([6,11,12].includes(kind)&&!bot.fireproof)||foes.some(e=>Math.abs(e.x-bot.x)<10&&Math.abs(e.y-bot.y)<10)){
-    bot.alive=false;bot.deathFrame=0;bot.target=null;bot.route=[];bot.action='Defeated';record(bot,'Defeated by explosion or enemy');continue;
+    bot.alive=false;bot.deathFrame=0;bot.target=null;bot.route=[];bot.action='Defeated';requestSound(p,4);record(bot,'Defeated by explosion or enemy');continue;
    }
    if(bot.cooldown>0)bot.cooldown--;
    const start={x:tx,y:ty},centered=Math.abs(bot.x-(tx*16+8))<.01&&Math.abs(bot.y-(ty*16+8))<.01;
@@ -225,8 +243,8 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
      try{if(slots.filter(i=>p.RAM[0x84f+i]).length>=bot.bombCapacity)throw new Error('Own bombs are still active');const slot=spawnBomb(p,tx,ty,{slots,automatic:true});state.bombRanges[slot]=bot.fireRange;bot.remoteTimers[slot-slots[0]]=0;bot.bombsPlaced++;bot.cooldown=60;bot.route=escape;bot.target=bot.route.shift();bot.action='Bombing and escaping';record(bot,'Placed original-engine bomb');continue;}catch{}
     }
    }
-   if(danger.has(key(tx,ty))||monsterClearance(foes,bot.x,bot.y)<32||(bot.target&&monsterDanger.has(key(bot.target.x,bot.target.y)))){
-    bot.route=retreatRoute(p,bot,foes,danger,monsterDanger);bot.target=bot.route.shift()??null;bot.action=danger.has(key(tx,ty))?'Escaping':'Avoiding monsters';
+   if(danger.has(key(tx,ty))||monsterClearance(predicted,bot.x,bot.y)<32||(bot.target&&monsterDanger.has(key(bot.target.x,bot.target.y)))){
+    bot.route=retreatRoute(p,bot,foes,danger,monsterDanger,predicted);bot.target=bot.route.shift()??null;bot.action=danger.has(key(tx,ty))?'Escaping':'Avoiding monsters';
     if(!bot.target)continue;
    }
    if(bot.target){
@@ -235,7 +253,7 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
     const speed=bot.speedUp?1.5:.75,move=Math.min(speed,Math.abs(dx||dy)),nextX=bot.x+(dx?Math.sign(dx)*move:0),nextY=bot.y+(!dx&&dy?Math.sign(dy)*move:0);
     if(!canStep(p,bot.x,bot.y,nextX,nextY,bot)){bot.target=null;bot.route=[];bot.action='Blocked';continue;}
     bot.x=nextX;bot.y=nextY;if(dx)bot.direction=dx>0?1:3;else if(dy)bot.direction=dy>0?2:0;
-    bot.animation=(bot.animation+1)%32;
+    if(move>0){bot.animation=(bot.animation+1)%32;if(bot.animation%16===8)requestSound(p,p.RAM[0x84a]===2?0x12:1);}
     if(Math.abs(dx)+Math.abs(dy)<=speed){bot.x=bot.target.x*16+8;bot.y=bot.target.y*16+8;bot.target=null;}
     continue;
    }
@@ -286,13 +304,14 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
    }
   }
  };
- return {state,add,update,restore(data){validateCompanionState(data);Object.assign(state,{bombRanges:Array(40).fill(0)},structuredClone(data));p._companionBombRanges=state.bombRanges;p._botSkullCells=undefined;for(const [i,b]of state.bots.entries()){if(b.deathFrame===undefined)b.deathFrame=b.alive?null:DEATH_FRAMES;if(b.bombBank===undefined)b.bombBank=i;if(b.bombCapacity===undefined)b.bombCapacity=1;const defaults={fireRange:Math.max(1,Math.min(5,p.RAM[0x84d]&127)),speedUp:false,remote:false,bombPass:false,wallPass:false,fireproof:0,extraLives:0,pickupsCollected:0,remoteTimers:Array(5).fill(0)};for(const [k,v]of Object.entries(defaults))if(b[k]===undefined)b[k]=v;}},reset(){state.bots=[];state.stage=null;state.steps=0;state.events=[];state.nextID=1;state.active=false;state.bombRanges.fill(0);p._botSkullCells=undefined;}};
+ return {state,add,update,restore(data){validateCompanionState(data);Object.assign(state,{bombRanges:Array(40).fill(0),foeMotion:[]},structuredClone(data));p._companionBombRanges=state.bombRanges;p._botSkullCells=undefined;for(const [i,b]of state.bots.entries()){if(b.deathFrame===undefined)b.deathFrame=b.alive?null:DEATH_FRAMES;if(b.bombBank===undefined)b.bombBank=i;if(b.bombCapacity===undefined)b.bombCapacity=1;const defaults={fireRange:Math.max(1,Math.min(5,p.RAM[0x84d]&127)),speedUp:false,remote:false,bombPass:false,wallPass:false,fireproof:0,extraLives:0,pickupsCollected:0,remoteTimers:Array(5).fill(0)};for(const [k,v]of Object.entries(defaults))if(b[k]===undefined)b[k]=v;}},reset(){state.bots=[];state.stage=null;state.steps=0;state.events=[];state.nextID=1;state.active=false;state.bombRanges.fill(0);state.foeMotion=[];p._botSkullCells=undefined;}};
 }
 export function validRoute(route){return Array.isArray(route)&&route.length<=1024&&route.every(validTile);}
 export function validTile(t){return t&&Number.isInteger(t.x)&&t.x>=2&&t.x<=31&&Number.isInteger(t.y)&&t.y>=1&&t.y<=31&&(t.button===undefined||NEIGHBORS.some(n=>n[2]===t.button));}
 export function validateCompanionState(data){
  const integer=n=>Number.isSafeInteger(n)&&n>=0;
- if(!data||Object.keys(data).some(k=>!['bots','stage','nextID','steps','events','active','bombRanges'].includes(k))||!Array.isArray(data.bots)||data.bots.length>4||!integer(data.nextID)||!integer(data.steps)||typeof data.active!=='boolean'||(data.stage!==null&&!/^[0-7]:[0-7]$/.test(data.stage))||!Array.isArray(data.events)||data.events.length>40)throw new Error('Invalid teammate state in save.');
+ if(!data||Object.keys(data).some(k=>!['bots','stage','nextID','steps','events','active','bombRanges','foeMotion'].includes(k))||!Array.isArray(data.bots)||data.bots.length>4||!integer(data.nextID)||!integer(data.steps)||typeof data.active!=='boolean'||(data.stage!==null&&!/^[0-7]:[0-7]$/.test(data.stage))||!Array.isArray(data.events)||data.events.length>40)throw new Error('Invalid teammate state in save.');
+ if(data.foeMotion!==undefined&&(!Array.isArray(data.foeMotion)||data.foeMotion.length>32||new Set(data.foeMotion.map(e=>e?.slot)).size!==data.foeMotion.length||data.foeMotion.some(e=>!e||!integer(e.slot)||e.slot>31||!integer(e.type)||e.type>255||![e.x,e.y].every(n=>Number.isFinite(n)&&n>=0&&n<=65535)||![e.vx,e.vy].every(n=>Number.isFinite(n)&&Math.abs(n)<=2))))throw new Error('Invalid monster motion in save.');
  if(data.bombRanges!==undefined&&(!Array.isArray(data.bombRanges)||data.bombRanges.length!==40||data.bombRanges.some(n=>!integer(n)||n>5)))throw new Error('Invalid saved bomb ranges.');
  for(const b of data.bots)if(!b||!Object.hasOwn(COLORS,b.color)||!integer(b.id)||!Number.isFinite(b.x)||!Number.isFinite(b.y)||b.x<32||b.x>520||b.y<16||b.y>520||typeof b.alive!=='boolean'||(b.target!==null&&!validTile(b.target))||!validRoute(b.route)||!integer(b.cooldown)||!integer(b.animation)||!integer(b.bombsPlaced)||!Number.isInteger(b.direction)||b.direction<0||b.direction>3||typeof b.action!=='string'||b.action.length>100)throw new Error('Invalid teammate state in save.');
  for(const b of data.bots)if(b.deathFrame!==undefined&&(b.alive?b.deathFrame!==null:!integer(b.deathFrame)||b.deathFrame>DEATH_FRAMES))throw new Error('Invalid teammate death animation in save.');

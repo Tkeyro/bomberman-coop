@@ -120,7 +120,7 @@ function step(){
  if(initialBots&&isCampaign(machine)&&!(machine.RAM[0x43a]&7)&&!machine.RAM[0x437]){
   const person=watchBots(count)?{x:40,y:24}:playerPosition(machine),blocked=watchBots(count)?new Set():new Set([`${Math.floor(person.x/16)},${Math.floor(person.y/16)}`]);for(let n=0;n<initialBots;n++){try{const tile=nearestFreeTile(machine,{x:Math.floor(person.x/16),y:Math.floor(person.y/16)},blocked);companions.add(tile.x,tile.y);blocked.add(`${tile.x},${tile.y}`);}catch(error){message(error.message);break;}}initialBots=0;setModeLabels();
  }
- if(watchBots(count)&&spectator.state.finished&&running){pause();setModeLabels();message('The AI team was defeated. Choose a new game from Main menu.');}
+ if(watchBots(count)&&spectator.state.finished&&running){if(mode==='new'&&newCampaign.retry()){spectator.configure(true);setModeLabels();message(`The AI team was defeated. Retrying NEW stage ${newCampaign.state.round} with ${watchBots(count)} bots.`);}else{pause();setModeLabels();message('The AI team was defeated. Choose a new game from Main menu.');}}
  if(pendingTrace&&frame>=pendingTrace.start+120)finishTrace();if(frame%60===0)setModeLabels();
 }
 function tick(now){if(running){accumulator+=Math.min(now-lastTime,FRAME_MS*3);try{let steps=0;while(accumulator>=FRAME_MS&&steps++<3){step();accumulator-=FRAME_MS;}$('frame-count').textContent=String(frame);}catch(error){pause();message('Emulation stopped: '+error.message);}}lastTime=now;requestAnimationFrame(tick);}

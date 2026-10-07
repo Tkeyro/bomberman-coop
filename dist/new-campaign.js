@@ -1,4 +1,4 @@
-import {isCampaign,tileKind,enemies,spawnEnemy,spawnItem,playerPosition} from './campaign.js';
+import {isCampaign,tileKind,enemies,spawnEnemy,spawnItem,playerPosition,pickups,restoreFloor} from './campaign.js';
 const ENEMY_BASES=[0xd98,0xdb8,0xdd8,0xdf8,0xe18,0xe38,0xe58,0xe78,0xe98,0xeb8,0xed8,0xef8,0xf18,0xf38,0xf58,0xf78];
 function random(seed){let value=seed>>>0;return()=>{value=(Math.imul(value,1664525)+1013904223)>>>0;return value/4294967296;};}
 function shuffle(values,rng){for(let i=values.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[values[i],values[j]]=[values[j],values[i]];}return values;}
@@ -17,6 +17,7 @@ export function generateChallengeMap(seed,round,players=1){
 }
 export function createNewCampaign(p,{onRound=()=>{},getFocus=()=>playerPosition(p)}={}){
  const state={enabled:false,seed:1,round:1,players:1,ready:false,pending:false,width:0,height:0,tiles:null,enemyTemplate:null};
+ p._newCampaign=state;
  const set=p.Set,run=p.Run;
  function camera(){const pos=getFocus(),x=Math.max(8,Math.min(state.width*16-256,pos.x-120)),y=Math.max(0,Math.min(state.height*16-208,pos.y-104));return [Math.floor(x)&255,Math.floor(x)>>8,Math.floor(y)&255,Math.floor(y)>>8];}
  p.Set=function(address,value){
@@ -41,7 +42,7 @@ export function createNewCampaign(p,{onRound=()=>{},getFocus=()=>playerPosition(
   if(!state.tiles)captureTemplates();const map=generateChallengeMap(state.seed,state.round,state.players),v=p.VDC[0];state.width=map.width;state.height=map.height;
   p.RAM[0x434]=map.width;p.RAM[0x435]=map.height;p.RAM[0x437]=0;p.RAM[0x43d]=40;p.RAM[0x43e]=0;p.RAM[0x43f]=24;p.RAM[0x440]=0;p.RAM[0x43b]=2;p.RAM[0x43c]=0;p.RAM[0x76]=p.RAM[0x77]=0;
   p.RAM[0xd8d]=6;p.RAM[0xd8e]=59;p.RAM[0xd8f]=59;p.RAM[0xd90]=0;
-  for(let i=0;i<40;i++)p.RAM[0x84f+i]=0;for(let i=0;i<25;i++)p.RAM[0xf9b+i]=0;for(let i=0;i<32;i++)p.RAM[0xd98+i]=0;
+  for(let i=0;i<40;i++)p.RAM[0x84f+i]=0;for(let i=0;i<175;i++)p.RAM[0x96d+i]=0;for(let i=0;i<25;i++)p.RAM[0xf9b+i]=0;for(let i=0;i<32;i++)p.RAM[0xd98+i]=0;
   for(let y=0;y<32;y++)for(let x=0;x<32;x++){
    const kind=map.cells[y*32+x],tiles=state.tiles[kind===4?2:kind];p.RAM[0x44a+y*32+x]=kind===4?0x24:[2,10].includes(kind)?0xc0|kind:kind;
    for(let i=0;i<4;i++)v.VRAM[(y*2+(i>>1))*v.VScreenWidth+x*2+(i&1)]=tiles[i];
@@ -57,17 +58,19 @@ export function createNewCampaign(p,{onRound=()=>{},getFocus=()=>playerPosition(
   if(!state.enabled||!isCampaign(p)||(p.RAM[0x43a]&7))return;
   if(state.pending){state.round++;build();}
   else if(!state.ready||p.RAM[0x434]!==state.width||p.RAM[0x435]!==state.height)build();
-  // Old NEW saves lack the native redraw metadata. Repair only ordinary ground,
-  // blocks and flames; hidden exits/items retain their original encoding.
+  // Restore ordinary terrain flags and cleared pickup markers in older saves.
+  // Live pickups and hidden exits/items retain their native encoding.
+  const liveItems=new Set(pickups(p).map(item=>item.y*32+item.x));
   for(let y=1;y<state.height;y++)for(let x=2;x<state.width;x++){
    const address=0x44a+y*32+x,raw=p.RAM[address],kind=raw&31;
-   if(raw<32&&[2,6,10,11,12].includes(kind))p.RAM[address]=raw|0xc0;
+   if([2,6,10,11,12].includes(kind)&&(raw&224)!==0xc0)p.RAM[address]=0xc0|kind;
+   if(kind===7&&!liveItems.has(y*32+x))restoreFloor(p,x,y,0xc0);
    const first=y*2*p.VDC[0].VScreenWidth+x*2;
    if(kind===10&&p.VDC[0].VRAM[first]===0x300)for(let i=0;i<4;i++)p.VDC[0].VRAM[(y*2+(i>>1))*p.VDC[0].VScreenWidth+x*2+(i&1)]=state.tiles[10][i];
   }
   const coords=camera();for(let i=0;i<4;i++)p.RAM[0x25+i]=coords[i];
  }
- return {state,update,configure(enabled,players=1,seed=crypto.getRandomValues(new Uint32Array(1))[0]){Object.assign(state,{enabled,seed,round:1,players,ready:false,pending:false,width:0,height:0,tiles:null,enemyTemplate:null});},restore(data){validateNewCampaign(data);Object.assign(state,structuredClone(data));}};
+ return {state,update,retry(){if(!state.enabled||!state.ready||!isCampaign(p)||(p.RAM[0x43a]&7))return false;build();return true;},configure(enabled,players=1,seed=crypto.getRandomValues(new Uint32Array(1))[0]){Object.assign(state,{enabled,seed,round:1,players,ready:false,pending:false,width:0,height:0,tiles:null,enemyTemplate:null});},restore(data){validateNewCampaign(data);Object.assign(state,structuredClone(data));}};
 }
 export function validateNewCampaign(s){
  const integer=(n,max)=>Number.isSafeInteger(n)&&n>=0&&n<=max;
