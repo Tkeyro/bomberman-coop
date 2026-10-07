@@ -1,4 +1,5 @@
 import {COLORS} from './session.js';
+export const AI_COLOR_CYCLE=Object.freeze(['original','black','blue','green','red','violet','orange','yellow']);
 export const companionBombSlots=bot=>Array.from({length:5},(_,i)=>(bot.bombBank===4?0:20+bot.bombBank*5)+i);
 export const ITEM_CATALOG = [
  ['fire','Fire up',0],['bomb','Bomb up',1],['remote','Remote control',2],['speed','Roller shoes',3],
@@ -274,7 +275,7 @@ const visibleBot=b=>b.alive||(Number.isInteger(b.deathFrame)&&b.deathFrame<DEATH
 const BOMB_PALETTE_BASE=3200,BOMB_SHADES={6:.71,7:.57,8:.86,10:.43,15:1};
 export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p),getHumanColor=()=> 'original'}={}) {
  installCampaignTracker(p);
- const state={bots:[],stage:null,nextID:1,steps:0,events:[],active:false,bombRanges:Array(40).fill(0),bombColors:Array(40).fill(null),foeMotion:[]};
+ const state={bots:[],stage:null,nextID:1,colorCursor:0,steps:0,events:[],active:false,bombRanges:Array(40).fill(0),bombColors:Array(40).fill(null),foeMotion:[]};
  p._companionBombRanges=state.bombRanges;
  const paletteCache=new Map();
  const bombPaletteCache=new Map(),bombVariants=Object.keys(COLORS),originalBackground=p.MakeBGLine,originalSet=p.Set;let bombColorsEnabled=true;
@@ -333,13 +334,14 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p),getH
  };
  // Campaign normally ticks ten human bomb slots; native drawing supports forty.
  p.CPURun=function(){const campaign=this.MPR[4]===9*8192&&this.RAM[0x84a]<8,extended=campaign&&this.PC===0x9080,skipEnemySlots=campaign&&this.PC===0x90aa&&this.X===20;const result=cpu.call(this);if(extended)this.X=39;else if(skipEnemySlots)this.X=9;return result;};
- function add(x,y) {
+ function add(x,y,{color:chosenColor}={}) {
   const online=p._onlineCampaign?.state.enabled;
   requireFloor(p,x,y);if(state.bots.filter(visibleBot).length>=(online?5:4))throw new Error('Maximum teammates on screen. Wait for a death animation to finish.');
-  const variants=Object.keys(COLORS),color=variants[Math.floor(Math.random()*variants.length)];
+  if(chosenColor!==undefined&&!Object.hasOwn(COLORS,chosenColor))throw new Error('Unknown Bomberman color.');
+  const color=chosenColor??AI_COLOR_CYCLE[state.colorCursor];
   const bombBank=(online?[0,1,2,3,4]:[0,1,2,3]).find(bank=>!state.bots.some(b=>visibleBot(b)&&b.bombBank===bank)&&companionBombSlots({bombBank:bank}).every(i=>p.RAM[0x84f+i]===0));if(bombBank===undefined)throw new Error('Wait for the previous teammate bombs to finish.');
   const bot={id:state.nextID++,x:x*16+8,y:y*16+8,color,alive:true,deathFrame:null,bombBank,bombCapacity:1,fireRange:1,speedUp:false,remote:false,bombPass:false,wallPass:false,fireproof:0,extraLives:0,pickupsCollected:0,remoteTimers:Array(5).fill(0),target:null,route:[],goal:null,yieldFrames:0,cooldown:0,direction:2,animation:0,action:'Exploring',bombsPlaced:0};
-  state.stage=stageID(p);state.bots=state.bots.filter(visibleBot);state.bots.push(bot);p._sharedPowerups?.inherit(bot);return bot;
+  state.stage=stageID(p);state.bots=state.bots.filter(visibleBot);state.bots.push(bot);p._sharedPowerups?.inherit(bot);if(chosenColor===undefined)state.colorCursor=(state.colorCursor+1)%AI_COLOR_CYCLE.length;return bot;
  }
  function respawnForStage(){
   const online=p._onlineCampaign?.state.enabled,roster=online?state.bots:state.bots.filter(b=>b.alive),human=getHuman(),blocked=human?new Set([key(Math.floor(human.x/16),Math.floor(human.y/16))]):new Set(),cells=campaignSpawnCells(p,roster.length,{blocked});
@@ -524,13 +526,14 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p),getH
    }
   }
  };
- return {state,add,update,respawnForStage,setBombColors(enabled){bombColorsEnabled=Boolean(enabled);},get bombColorsEnabled(){return bombColorsEnabled;},restore(data){validateCompanionState(data);Object.assign(state,{bombRanges:Array(40).fill(0),bombColors:Array(40).fill(null),foeMotion:[]},structuredClone(data));p._companionBombRanges=state.bombRanges;p._botSkullCells=undefined;bombPaletteCache.clear();for(const color of bombVariants)bombPalette(color);for(const [i,b]of state.bots.entries()){if(b.deathFrame===undefined)b.deathFrame=b.alive?null:DEATH_FRAMES;if(b.bombBank===undefined)b.bombBank=i;if(b.bombCapacity===undefined)b.bombCapacity=1;const defaults={fireRange:Math.max(1,Math.min(5,p.RAM[0x84d]&127)),speedUp:false,remote:false,bombPass:false,wallPass:false,fireproof:0,extraLives:0,pickupsCollected:0,remoteTimers:Array(5).fill(0),goal:null,yieldFrames:0};for(const [k,v]of Object.entries(defaults))if(b[k]===undefined)b[k]=v;}},reset(){state.bots=[];state.stage=null;state.steps=0;state.events=[];state.nextID=1;state.active=false;state.bombRanges.fill(0);state.bombColors.fill(null);state.foeMotion=[];p._botSkullCells=undefined;}};
+ return {state,add,update,respawnForStage,setBombColors(enabled){bombColorsEnabled=Boolean(enabled);},get bombColorsEnabled(){return bombColorsEnabled;},restore(data){validateCompanionState(data);Object.assign(state,{bombRanges:Array(40).fill(0),bombColors:Array(40).fill(null),foeMotion:[]},structuredClone(data));state.colorCursor=data.colorCursor??(Math.max(0,data.nextID-1)%AI_COLOR_CYCLE.length);p._companionBombRanges=state.bombRanges;p._botSkullCells=undefined;bombPaletteCache.clear();for(const color of bombVariants)bombPalette(color);for(const [i,b]of state.bots.entries()){if(b.deathFrame===undefined)b.deathFrame=b.alive?null:DEATH_FRAMES;if(b.bombBank===undefined)b.bombBank=i;if(b.bombCapacity===undefined)b.bombCapacity=1;const defaults={fireRange:Math.max(1,Math.min(5,p.RAM[0x84d]&127)),speedUp:false,remote:false,bombPass:false,wallPass:false,fireproof:0,extraLives:0,pickupsCollected:0,remoteTimers:Array(5).fill(0),goal:null,yieldFrames:0};for(const [k,v]of Object.entries(defaults))if(b[k]===undefined)b[k]=v;}},reset({preserveColorCycle=false}={}){if(!preserveColorCycle)state.colorCursor=0;state.bots=[];state.stage=null;state.steps=0;state.events=[];state.nextID=1;state.active=false;state.bombRanges.fill(0);state.bombColors.fill(null);state.foeMotion=[];p._botSkullCells=undefined;}};
 }
 export function validRoute(route){return Array.isArray(route)&&route.length<=1024&&route.every(validTile);}
 export function validTile(t){return t&&Number.isInteger(t.x)&&t.x>=2&&t.x<=31&&Number.isInteger(t.y)&&t.y>=1&&t.y<=31&&(t.button===undefined||NEIGHBORS.some(n=>n[2]===t.button));}
 export function validateCompanionState(data){
  const integer=n=>Number.isSafeInteger(n)&&n>=0;
- if(!data||Object.keys(data).some(k=>!['bots','stage','nextID','steps','events','active','bombRanges','bombColors','foeMotion'].includes(k))||!Array.isArray(data.bots)||data.bots.length>5||!integer(data.nextID)||!integer(data.steps)||typeof data.active!=='boolean'||(data.stage!==null&&!/^[0-7]:[0-7]$/.test(data.stage))||!Array.isArray(data.events)||data.events.length>40)throw new Error('Invalid teammate state in save.');
+ if(!data||Object.keys(data).some(k=>!['bots','stage','nextID','colorCursor','steps','events','active','bombRanges','bombColors','foeMotion'].includes(k))||!Array.isArray(data.bots)||data.bots.length>5||!integer(data.nextID)||!integer(data.steps)||typeof data.active!=='boolean'||(data.stage!==null&&!/^[0-7]:[0-7]$/.test(data.stage))||!Array.isArray(data.events)||data.events.length>40)throw new Error('Invalid teammate state in save.');
+ if(data.colorCursor!==undefined&&(!integer(data.colorCursor)||data.colorCursor>=AI_COLOR_CYCLE.length))throw new Error('Invalid AI color sequence in save.');
  if(data.foeMotion!==undefined&&(!Array.isArray(data.foeMotion)||data.foeMotion.length>32||new Set(data.foeMotion.map(e=>e?.slot)).size!==data.foeMotion.length||data.foeMotion.some(e=>!e||!integer(e.slot)||e.slot>31||!integer(e.type)||e.type>255||![e.x,e.y].every(n=>Number.isFinite(n)&&n>=0&&n<=65535)||![e.vx,e.vy].every(n=>Number.isFinite(n)&&Math.abs(n)<=2)||['speedX','speedY'].some(k=>e[k]!==undefined&&(!Number.isFinite(e[k])||e[k]<0||e[k]>2)))))throw new Error('Invalid monster motion in save.');
  if(data.bombRanges!==undefined&&(!Array.isArray(data.bombRanges)||data.bombRanges.length!==40||data.bombRanges.some(n=>!integer(n)||n>5)))throw new Error('Invalid saved bomb ranges.');
  if(data.bombColors!==undefined&&(!Array.isArray(data.bombColors)||data.bombColors.length!==40||data.bombColors.some(color=>color!==null&&!Object.hasOwn(COLORS,color))))throw new Error('Invalid saved bomb colors.');

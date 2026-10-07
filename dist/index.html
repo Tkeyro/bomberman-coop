@@ -12,7 +12,7 @@
   <div class="page-wrap">
     <header class="site-header">
       <a class="brand" href="./" aria-label="Bomberman Co-op Lab home"><span class="brand-mark" aria-hidden="true">B<span>+</span></span><span>BOMBERMAN<span class="brand-sub">CO-OP LAB</span></span></a>
-      <div class="header-meta"><span class="status-dot" aria-hidden="true"></span> CAMPAIGN RESEARCH <span class="version">V0.4.11</span></div>
+      <div class="header-meta"><span class="status-dot" aria-hidden="true"></span> CAMPAIGN RESEARCH <span class="version">V0.4.12</span></div>
     </header>
 
     <main>
@@ -66,9 +66,9 @@
         <div><h3>Spawn location</h3><div id="admin-map" class="admin-map" aria-label="Choose spawn tile"></div><p id="spawn-coordinate" class="field-note"></p><p id="spawn-tool" class="field-note">Select a tool, then click empty tiles.</p><button id="spawn-deselect" class="button button-outline" disabled>Deselect</button><div id="team-list" class="team-list"></div></div>
         <div>
           <h3>Items</h3><div id="item-grid" class="inventory-grid"></div>
-          <h3>Teammates &amp; bombs</h3><div class="inventory-grid"><button id="spawn-bot">＋ AI Bomberman<span>Random color, including white</span></button><button id="spawn-bomb">● Bomb<span>Place copies on empty tiles</span></button></div>
+          <h3>Teammates &amp; bombs</h3><div class="inventory-grid"><button id="spawn-bot">＋ AI Bomberman<span id="spawn-bot-color">Cycles through all eight colors</span></button><button id="spawn-bomb">● Bomb<span>Place copies on empty tiles</span></button></div>
           <p id="admin-bomb-queue" class="field-note">Extra bomb placements wait for a native bomb slot, then ignite as slots become available.</p>
-          <p class="field-note">Up to four AI teammates. AI can be defeated and is still experimental. In online campaigns, only the host can open the inventory; everyone pauses while the host makes changes.</p>
+          <p class="field-note">Up to four extra AI locally, or five Bombermen total online. Added AI cycle through White, Black, Blue, Green, Red, Violet, Orange and Yellow. AI can be defeated and is still experimental. In online campaigns, only the host can open the inventory; everyone pauses while the host makes changes.</p>
           <h3>Go to level</h3>
           <div id="admin-original-level" class="admin-level-controls"><label for="admin-world">World<select id="admin-world"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option><option value="4">5</option><option value="5">6</option><option value="6">7</option><option value="7">8</option></select></label><label for="admin-area">Level<select id="admin-area"><option value="0">1</option><option value="1">2</option><option value="2">3</option><option value="3">4</option><option value="4">5</option><option value="5">6</option><option value="6">7</option><option value="7">8 · Boss</option></select></label></div>
           <div id="admin-dlc-level" class="admin-level-controls" hidden><label for="admin-dlc-round">DLC stage<input id="admin-dlc-round" type="number" min="1" max="1000000" step="1" value="1"></label></div>

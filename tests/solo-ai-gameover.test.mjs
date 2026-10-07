@@ -29,12 +29,14 @@ function setup(){
   if(p.Palette.every(value=>(value&0x1ff)===0))events.black++;
   if(pendingTeam&&isCampaign(p)&&!(p.RAM[0x43a]&7)&&!p.RAM[0x437]){spawnTeam();pendingTeam=false;}
  };
+ function completeAnimation(){for(let i=0;i<DEATH_FRAMES&&crew.state.bots.some(b=>!b.alive&&b.deathFrame<DEATH_FRAMES);i++){assert.equal(watch.retry(),false,'native retry waits for the last death pose');watch.update();crew.update();p.Run();}}
  function defeat(){
   const bot=crew.state.bots[0],template=enemies(p)[0].slot;
   spawnEnemy(p,template,Math.floor(bot.x/16),Math.floor(bot.y/16));crew.update();
   assert.equal(bot.alive,false);assert.equal(bot.deathFrame,0);
+  completeAnimation();assert.equal(bot.deathFrame,DEATH_FRAMES);
  }
- return {p,crew,watch,events,step,defeat};
+ return {p,crew,watch,events,step,defeat,completeAnimation};
 }
 
 test('Solo AI final native life ends after the native death sequence and cannot respawn',{skip:!rom},()=>{
@@ -68,13 +70,14 @@ test('Solo AI spends its native spare life before ending on the next defeat',{sk
 });
 
 test('Solo AI uses a collected extra life before committing to the final native defeat',{skip:!rom},()=>{
- const {p,crew,watch,events,step}=setup(),bot=crew.state.bots[0];
+ const {p,crew,watch,events,step,completeAnimation}=setup(),bot=crew.state.bots[0];
  p.RAM[0x438]=0;p.RAM.fill(0,0xd98,0xdb8);p.RAM.fill(0,0x84f,0x877);
  bot.alive=false;bot.deathFrame=DEATH_FRAMES;bot.extraLives=1;bot.target=null;bot.route=[];
  assert.equal(watch.retry(),false,'a collected revival is resolved before the native life counter');
  crew.update();assert.equal(bot.alive,true);assert.equal(bot.extraLives,0);assert.equal(bot.deathFrame,null);
  assert.equal(watch.retry(),false);assert.equal(p.RAM[0x438],0);assert.equal(events.gameovers,0);
  bot.alive=false;bot.deathFrame=0;bot.target=null;bot.route=[];
+ completeAnimation();
  assert.equal(watch.retry(),true);
  for(let i=0;i<300&&!watch.state.finished;i++)step();
  assert.equal(watch.state.finished,true);assert.equal(events.gameovers,1);assert.equal(events.retries,0);

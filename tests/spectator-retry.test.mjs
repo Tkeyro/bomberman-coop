@@ -62,6 +62,11 @@ for(const [mode,count,laterStage]of [['solo',1,false],['campaign',4,true]]){
   spawnEnemy(p,template,Math.floor(last.x/16),Math.floor(last.y/16));
   crew.update();assert.equal(last.alive,false);assert.equal(last.deathFrame,0);
   p.RAM[0x438]=0;
+  for(let frame=0;frame<DEATH_FRAMES;frame++){
+   assert.equal(watch.retry(),false,'the final death animation finishes before native retry');
+   watch.update();crew.update();p.Run();
+  }
+  assert.equal(last.deathFrame,DEATH_FRAMES);
   assert.equal(watch.retry(),true,'the final defeat starts a native retry even on the last native life');
   assert.equal(watch.retry(),false,'repeated frames cannot start a second retry');
   assert.equal(watch.state.transition.phase,'dying');

@@ -18,7 +18,9 @@ export function createSpectator(p,{getBots=()=>[],onRetry=()=>{},finiteLives=()=
  }
  function retry(){
   const bots=getBots();
-  if(!state.enabled||p._newCampaign?.enabled||state.transition||!isCampaign(p)||(p.RAM[0x43a]&7)||p.RAM[0x437]||!bots.length||bots.some(b=>b.alive||b.extraLives))return false;
+  // A team defeat must finish every companion's native death pose before
+  // starting the hidden controller's music/fade/retry sequence.
+  if(!state.enabled||p._newCampaign?.enabled||state.transition||!isCampaign(p)||(p.RAM[0x43a]&7)||p.RAM[0x437]||!bots.length||bots.some(b=>b.alive||b.extraLives||!Number.isInteger(b.deathFrame)||b.deathFrame<DEATH_FRAMES))return false;
   beginRetry();return true;
  }
  p.CPURun=function(){

@@ -1,6 +1,6 @@
 import {COLORS,ROM_SHA256} from './session.js';
 import {tuneStreamReceiver,tuneStreamSender,createStreamStats} from './stream-tuning.js';
-export const ONLINE_REVISION='0.4.11';
+export const ONLINE_REVISION='0.4.12';
 const MAX_TRANSFER=16*1024*1024,CHUNK=8192;
 export function stablePlayerID(storage=globalThis.localStorage){
  let id;try{id=storage?.getItem('bomberman-player-id');}catch{}
