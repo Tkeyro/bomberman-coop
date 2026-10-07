@@ -12,7 +12,7 @@
   <div class="page-wrap">
     <header class="site-header">
       <a class="brand" href="./" aria-label="Bomberman Co-op Lab home"><span class="brand-mark" aria-hidden="true">B<span>+</span></span><span>BOMBERMAN<span class="brand-sub">CO-OP LAB</span></span></a>
-      <div class="header-meta"><span class="status-dot" aria-hidden="true"></span> CAMPAIGN RESEARCH <span class="version">V0.2</span></div>
+      <div class="header-meta"><span class="status-dot" aria-hidden="true"></span> CAMPAIGN RESEARCH <span class="version">V0.3.1</span></div>
     </header>
 
     <main>
@@ -41,7 +41,7 @@
             <p id="rom-help" class="field-note">Your ROM stays in this browser. No game file is included with this site.</p>
             <p id="load-status" class="load-status" role="status" aria-live="polite">Waiting for a game file.</p>
             <div class="field"><label for="color-select">Bomberman color</label><select id="color-select" disabled><option value="original">Original white</option><option value="black">Black</option><option value="orange">Orange</option><option value="yellow">Yellow</option><option value="blue">Blue</option><option value="green">Green</option><option value="red">Red</option><option value="violet">Violet</option></select><p id="color-notice" class="field-note">Helmet and body use your color. Arms and legs match the face skin; hands and feet stay pink. Original white keeps its native appearance.</p></div>
-            <div class="field"><label for="player-count-select">NEW / Campaign / Battle players</label><select id="player-count-select"><option value="1">1 (NEW solo)</option><option value="2" selected>2 (you + 1 AI)</option><option value="3">3 (you + 2 AI)</option><option value="4">4 (you + 3 AI)</option><option value="5">5 (you + 4 AI)</option></select><p class="field-note">Or use Left/Right in the game menu. NEW has larger generated maps and 1–5 players. Teammates are local AI.</p></div>
+            <div class="field"><label for="player-count-select">NEW / Campaign / Battle players</label><select id="player-count-select"><option value="1">1 (NEW solo)</option><option value="2" selected>2 (you + 1 AI)</option><option value="3">3 (you + 2 AI)</option><option value="4">4 (you + 3 AI)</option><option value="5">5 (you + 4 AI)</option><option value="0">AI only — watch (4 bots)</option></select><p class="field-note">Or use Left/Right in the game menu. NEW has larger generated maps and 1–5 players. Teammates are local AI. Choose AI only — watch to spectate four bots.</p></div>
             <div class="save-controls"><button id="save-btn" class="button button-primary" disabled>Save progress</button><button id="export-save-btn" class="button button-outline" disabled>Export save</button><label class="button button-outline save-import" for="save-input">Import save<input id="save-input" type="file" accept=".bmsave,.json" disabled></label><button id="open-menu-btn" class="button button-outline" disabled>Main menu</button><button id="admin-btn" class="button button-outline" disabled>Admin · F2</button></div><p id="save-status" role="status" class="field-note">Save in this browser, or export a file to keep a backup.</p>
             <div class="connection-status"><span class="neutral-dot" aria-hidden="true"></span><span id="online-status">Online rooms pending</span></div>
           </div>

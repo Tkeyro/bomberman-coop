@@ -4,15 +4,15 @@ const buttons=['UP','RIGHT','DOWN','LEFT','SHOT1','SHOT2','RUN','SELECT'];
 export function battlePosition(p,port){return {x:p.RAM[0x3cc+port]|p.RAM[0x3d1+port]<<8,y:p.RAM[0x3d6+port]|p.RAM[0x3db+port]<<8};}
 export function activeBattle(p){return p.RAM[0x84a]===8&&p.RAM[0x4b]>=2&&p.RAM[0x4b]<=5&&p.RAM[0x4a]===p.RAM[0x4b];}
 export function createBattleAI(p) {
- const state={enabled:false,count:2,plans:{},steps:0,bombsPlaced:0};
+ const state={enabled:false,count:2,spectator:false,plans:{},steps:0,bombsPlaced:0};
  const check=p.CheckGamePad;
- p.CheckGamePad=function(){check.call(this);if(state.enabled&&activeBattle(this))for(let i=1;i<state.count;i++)this.GamePad[i]=[0xbf,0xbf,0xbf,0xb0];};
- function release(){for(let port=1;port<5;port++)for(const button of buttons)p['UnsetButton'+button](port);}
+ p.CheckGamePad=function(){check.call(this);if(state.enabled&&activeBattle(this))for(let i=state.spectator?0:1;i<state.count;i++)this.GamePad[i]=[0xbf,0xbf,0xbf,0xb0];};
+ function release(preserveRun=false){for(let port=state.spectator?0:1;port<5;port++)for(const button of buttons)if(!(preserveRun&&port===0&&button==='RUN'))p['UnsetButton'+button](port);}
  function update(){
   if(!state.enabled)return;
-  release();if(!activeBattle(p)){state.plans={};return;}
+  release(true);if(!activeBattle(p)){state.plans={};return;}
   state.steps++;const danger=dangerCells(p),foes=enemies(p);
-  for(let port=1;port<state.count;port++){
+  for(let port=state.spectator?0:1;port<state.count;port++){
    if(p.RAM[0x3bd+port]!==0)continue;
    const position=battlePosition(p,port),tx=Math.floor(position.x/16),ty=Math.floor(position.y/16),start={x:tx,y:ty};
    const plan=state.plans[port]??={target:null,route:[],cooldown:0};if(plan.cooldown)plan.cooldown--;
@@ -40,12 +40,12 @@ export function createBattleAI(p) {
    }
   }
  }
- return {state,update,configure(count,enabled){release();state.enabled=enabled;state.count=count;state.plans={};state.steps=0;state.bombsPlaced=0;},restore(data){validateBattleState(data);Object.assign(state,structuredClone(data));},release};
+ return {state,update,configure(count,enabled,spectator=false){release();state.enabled=enabled;state.count=count;state.spectator=spectator;state.plans={};state.steps=0;state.bombsPlaced=0;},restore(data){validateBattleState(data);Object.assign(state,{spectator:false},structuredClone(data));},release};
 }
 export function validateBattleState(data){
  const integer=n=>Number.isSafeInteger(n)&&n>=0;
- if(!data||Object.keys(data).some(k=>!['enabled','count','plans','steps','bombsPlaced'].includes(k))||typeof data.enabled!=='boolean'||!Number.isInteger(data.count)||data.count<2||data.count>5||!data.plans||Array.isArray(data.plans)||Object.keys(data.plans).length>4||!integer(data.steps)||!integer(data.bombsPlaced))throw new Error('Invalid battle AI save.');
- for(const [port,plan] of Object.entries(data.plans))if(!/^[1-4]$/.test(port)||!plan||(plan.target!==null&&!validTile(plan.target))||!validRoute(plan.route)||!integer(plan.cooldown))throw new Error('Invalid battle AI plan in save.');
+ if(!data||Object.keys(data).some(k=>!['enabled','count','spectator','plans','steps','bombsPlaced'].includes(k))||typeof data.enabled!=='boolean'||(data.spectator!==undefined&&typeof data.spectator!=='boolean')||!Number.isInteger(data.count)||data.count<2||data.count>5||!data.plans||Array.isArray(data.plans)||Object.keys(data.plans).length>(data.spectator?5:4)||!integer(data.steps)||!integer(data.bombsPlaced))throw new Error('Invalid battle AI save.');
+ for(const [port,plan] of Object.entries(data.plans))if(!(data.spectator?/^[0-4]$/:/^[1-4]$/).test(port)||!plan||(plan.target!==null&&!validTile(plan.target))||!validRoute(plan.route)||!integer(plan.cooldown))throw new Error('Invalid battle AI plan in save.');
  return data;
 }
 export function launchSequence(mode,count=2) {

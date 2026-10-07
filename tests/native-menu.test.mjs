@@ -32,8 +32,8 @@ test('native title font and six-row cursor replace old labels without changing g
  menu.setSave(true);menu.input('UP');frames(p,1);checkLabel('LOAD SAVE',200);menu.input('RUN');assert.deepEqual(chosen,{mode:'load',count:2});
  const redAt=y=>{let n=0;for(let yy=y;yy<y+16;yy++)for(let x=46;x<60;x++){const at=(yy*width+x)*4;if(p.ImageData.data[at]>200&&p.ImageData.data[at+1]<60&&p.ImageData.data[at+2]<60)n++;}return n;};
  assert.ok(redAt(200)>0,'sixth row has the original red cursor');assert.equal(redAt(130),0);
- menu.input('DOWN');menu.input('DOWN');menu.input('LEFT');assert.equal(menu.count,1);menu.input('RUN');assert.deepEqual(chosen,{mode:'new',count:1});menu.input('DOWN');menu.input('RIGHT');menu.input('RIGHT');menu.input('RIGHT');menu.input('RIGHT');assert.equal(menu.count,5);menu.input('RUN');assert.deepEqual(chosen,{mode:'campaign',count:5});
- menu.close();frames(p,1);frames(reference,2);assert.deepEqual(p.RAM,reference.RAM);assert.deepEqual(p.ImageData.data,reference.ImageData.data,'closing restores the original title rendering');
+ menu.input('DOWN');menu.input('DOWN');menu.input('LEFT');assert.equal(menu.count,1);menu.input('RUN');assert.deepEqual(chosen,{mode:'new',count:1});menu.input('DOWN');menu.input('RIGHT');menu.input('RIGHT');menu.input('RIGHT');assert.equal(menu.count,5);menu.input('RUN');assert.deepEqual(chosen,{mode:'campaign',count:5});menu.input('RIGHT');assert.equal(menu.count,0);frames(p,1);checkLabel('AI ONLY - WATCH (4 BOTS)',218,false);menu.input('RUN');assert.deepEqual(chosen,{mode:'campaign',count:0});menu.input('LEFT');assert.equal(menu.count,5);
+ menu.close();frames(p,1);frames(reference,3);assert.deepEqual(p.RAM,reference.RAM);assert.deepEqual(p.ImageData.data,reference.ImageData.data,'closing restores the original title rendering');
 });
 test('the replacement menu covers every startup title frame before controls unlock',{skip:!rom},()=>{
  const p=createMachine(fs.readFileSync(rom)),menu=installNativeMenu(p);menu.prepare(4);let menuLines=0,oldInk=0;const sprite=p.MakeSpriteLine;

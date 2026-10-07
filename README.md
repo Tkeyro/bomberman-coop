@@ -2,7 +2,7 @@
 
 Browser extension for **Bomberman (1990), TurboGrafx-16, USA**. The long-term goal is people on separate computers cooperating in the original campaign.
 
-**v0.3 adds a generated NEW campaign, matching lives-icon colors, monster-aware local AI and independent teammate bomb inventories.** Exact-position saves, a paused campaign inventory and original Battle with AI opponents remain available. Online rooms are not implemented. Campaign teammates are independent extension actors rendered from the ROM's loaded sprites; their bombs, block destruction and enemy kills use the original game engine. They are not additional native campaign controller ports.
+**v0.3.1 fixes NEW explosion floor restoration and adds AI-only watching alongside generated maps, matching lives-icon colors, monster-aware local AI and independent teammate bomb inventories.** Exact-position saves, a paused campaign inventory and original Battle with AI opponents remain available. Online rooms are not implemented. Campaign teammates are independent extension actors rendered from the ROM's loaded sprites; their bombs, block destruction and enemy kills use the original game engine. They are not additional native campaign controller ports.
 
 ## Play
 
@@ -29,7 +29,7 @@ Click the game screen to focus keyboard controls. Losing focus releases held key
 
 ## NEW campaign
 
-Choose **1-5P - NEW** for one human plus zero to four local AI teammates. Seeded maps start larger than the opening original map and grow from native bounds 27×21 to 31×29, with more breakable blocks and 14–28 native monsters depending on round and team size. A protected starting area and guaranteed fire-up give you room to begin. Other power-ups are scattered around the map; the blue exit is hidden under a block. Kill every monster and uncover/reach the exit to generate the next round. Each round resets the seven-minute clock and brings a fresh team. Maps, round number and generator state are saved with your session.
+Choose **1-5P - NEW** for one human plus zero to four local AI teammates. Seeded maps start larger than the opening original map and grow from native bounds 27×21 to 31×29, with more breakable blocks and 14–28 native monsters depending on round and team size. A protected starting area and guaranteed fire-up give you room to begin. Other power-ups are scattered around the map; the blue exit is hidden under a block. Kill every monster and uncover/reach the exit to generate the next round. Each round resets the seven-minute clock and brings a fresh team. Maps, round number and generator state are saved with your session. Explosion cleanup restores the original green floor, including outside the original map bounds; previous NEW saves repair their blackened floor on resume.
 
 This mode currently reuses the original opening region’s loaded tiles and Ballom model, with native music, pickups, bombs, explosions and collisions. Both camera axes follow the larger maps. Difficulty grows through density, size and monster count; comparison with every original late stage/boss has not been playtested. Separate-computer human co-op remains pending.
 
@@ -43,6 +43,10 @@ White, black, blue, green, red, violet, orange and yellow. Nonwhite variants use
 - **Export save** downloads a `.bmsave` backup. **Import save** can continue it on another computer after loading the same ROM.
 - Saves include emulator CPU/RAM/video/audio synthesis state, screen, color, AI actors/plans and menu launch progress. They do not contain the ROM file. The live audio output buffer is cleared on restoration.
 - Clearing site data removes the browser quick save. Export backups for long-term storage. Save format is tied to this extension version and pinned emulator core; incompatible/corrupt files are rejected.
+
+## Watch AI play
+
+Choose **AI only — watch (4 bots)** below the player-count options, or press Right past five players in the native menu, then start Solo, NEW, Campaign or Battle (A.I). Campaign modes use four independent AI actors with no visible or controllable human player. The camera follows a living bot and switches when it dies. A defeated team finishes its death animations, then the campaign pauses; use Main menu to start another game. Battle drives all four native controller ports; Enter advances results/retry. Save/load and Main menu → Continue game preserve spectator mode. The campaign planner remains experimental, so bots can die or wait when no safe route exists.
 
 ## Local admin inventory and AI
 

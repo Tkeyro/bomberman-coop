@@ -161,7 +161,7 @@ const DEATH_POSES=[
  [[80,24,730,4236],[80,9,730,6284]]
 ];
 const visibleBot=b=>b.alive||(Number.isInteger(b.deathFrame)&&b.deathFrame<DEATH_FRAMES);
-export function createCompanions(p,{colorize}={}) {
+export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={}) {
  installCampaignTracker(p);
  const state={bots:[],stage:null,nextID:1,steps:0,events:[],active:false};
  const paletteCache=new Map();
@@ -196,8 +196,8 @@ export function createCompanions(p,{colorize}={}) {
    const blast=blastCells(p,tx,ty),enemyApproach=attackZone.has(key(tx,ty));
    const useful=NEIGHBORS.some(([dx,dy])=>[2,3,4].includes(tileKind(p,tx+dx,ty+dy)))||enemyApproach;
    if(centered&&useful&&!bot.cooldown&&!danger.has(key(tx,ty))&&monsterClearance(foes,bot.x,bot.y)>=16&&!nowBombs.some(b=>b.x===tx&&b.y===ty)){
-    const proposed=new Set([...allDanger,...blast]),escape=findPath(p,start,n=>!proposed.has(key(n.x,n.y)),{allowDanger:true,blocked:allDanger,maxSteps:5}),person=playerPosition(p);
-    if(escape?.length&&!blast.has(key(Math.floor(person.x/16),Math.floor(person.y/16)))){
+    const proposed=new Set([...allDanger,...blast]),escape=findPath(p,start,n=>!proposed.has(key(n.x,n.y)),{allowDanger:true,blocked:allDanger,maxSteps:5}),person=getHuman();
+    if(escape?.length&&(!person||!blast.has(key(Math.floor(person.x/16),Math.floor(person.y/16))))){
      const slots=companionBombSlots(bot);
      try{if(slots.filter(i=>p.RAM[0x84f+i]).length>=bot.bombCapacity)throw new Error('Own bombs are still active');spawnBomb(p,tx,ty,{slots,automatic:true});bot.bombsPlaced++;bot.cooldown=60;bot.route=escape;bot.target=bot.route.shift();bot.action='Bombing and escaping';record(bot,'Placed original-engine bomb');continue;}catch{}
     }

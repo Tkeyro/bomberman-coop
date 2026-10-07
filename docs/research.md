@@ -116,3 +116,10 @@ NEW uses deterministic seeded maps and the opening region's already loaded floor
 Native camera writes to zero-page 0x25–0x28 are constrained to the larger map's player-follow coordinates while NEW is active. Original Solo/Campaign/Battle camera behavior is preserved when it is disabled. Generator seed, round, initialization references, pending transition and independent bot inventories are included in session saves; old saves without these optional fields remain loadable. Headless integration covers real pickups, human block collision, both scroll axes, native hidden-exit reveal, locked exit, round transition, bombs and exact replay. The six menu rows use native font/cursor at Y 130/144/158/172/186/200, with NEW supporting one through five players.
 
 Browser audio/layout/gamepad QA and late-game/boss comparisons remain outstanding. NEW uses local AI teammates and has no online transport or new monster-asset loading.
+
+
+## v0.3.1 floor restoration and spectators
+
+Generated ordinary floor and blocks now retain native high-bit redraw metadata (0xca/0xc2). Without 0xc0, explosion cleanup queued black background tiles 0x300/0x301 instead of green floor references 0x3304/0x3305/0x3314/0x3315. Real explosions verify green restoration near the start and beyond the original bounds while retaining active flames. NEW updates normalize old ordinary ground/block/flame metadata and repair already blank floor references in prior saves; hidden items/exits keep their own encoding.
+
+Player-count zero selects four AI actors and is rendered as AI ONLY - WATCH in the native menu. The campaign spectator keeps the unused native controller outside the arena, suppresses its two sprite entries, blocks its input and follows an AI actor with survivor fallback. Bot bomb planning excludes the unused human. Campaign completion waits for the full team death animations. Generator/companions/spectator state replay together in saves. Battle spectator mode includes native port zero in the AI loop. Existing saves without the optional spectator fields default to normal play.

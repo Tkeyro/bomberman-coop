@@ -15,10 +15,10 @@ export function generateChallengeMap(seed,round,players=1){
  for(const c of shuffle(floor.filter(c=>!occupied.has(c.y*32+c.x)&&(c.x!==exit.x||c.y!==exit.y)),rng).slice(0,types.length))items.push({...c,type:types[items.length-1]});
  return {width,height,cells,exit,monsters,items};
 }
-export function createNewCampaign(p,{onRound=()=>{}}={}){
+export function createNewCampaign(p,{onRound=()=>{},getFocus=()=>playerPosition(p)}={}){
  const state={enabled:false,seed:1,round:1,players:1,ready:false,pending:false,width:0,height:0,tiles:null,enemyTemplate:null};
  const set=p.Set,run=p.Run;
- function camera(){const pos=playerPosition(p),x=Math.max(8,Math.min(state.width*16-256,pos.x-120)),y=Math.max(0,Math.min(state.height*16-208,pos.y-104));return [Math.floor(x)&255,Math.floor(x)>>8,Math.floor(y)&255,Math.floor(y)>>8];}
+ function camera(){const pos=getFocus(),x=Math.max(8,Math.min(state.width*16-256,pos.x-120)),y=Math.max(0,Math.min(state.height*16-208,pos.y-104));return [Math.floor(x)&255,Math.floor(x)>>8,Math.floor(y)&255,Math.floor(y)>>8];}
  p.Set=function(address,value){
   if(state.enabled&&state.ready&&isCampaign(this)){
    const physical=this.MPR[address>>13]|(address&8191),offset=physical&8191;
@@ -43,7 +43,7 @@ export function createNewCampaign(p,{onRound=()=>{}}={}){
   p.RAM[0xd8d]=6;p.RAM[0xd8e]=59;p.RAM[0xd8f]=59;p.RAM[0xd90]=0;
   for(let i=0;i<40;i++)p.RAM[0x84f+i]=0;for(let i=0;i<25;i++)p.RAM[0xf9b+i]=0;for(let i=0;i<32;i++)p.RAM[0xd98+i]=0;
   for(let y=0;y<32;y++)for(let x=0;x<32;x++){
-   const kind=map.cells[y*32+x],tiles=state.tiles[kind===4?2:kind];p.RAM[0x44a+y*32+x]=kind===4?0x24:kind;
+   const kind=map.cells[y*32+x],tiles=state.tiles[kind===4?2:kind];p.RAM[0x44a+y*32+x]=kind===4?0x24:[2,10].includes(kind)?0xc0|kind:kind;
    for(let i=0;i<4;i++)v.VRAM[(y*2+(i>>1))*v.VScreenWidth+x*2+(i&1)]=tiles[i];
   }
   // A temporary live template reuses only monster art already loaded by the ROM.
@@ -57,6 +57,14 @@ export function createNewCampaign(p,{onRound=()=>{}}={}){
   if(!state.enabled||!isCampaign(p)||(p.RAM[0x43a]&7))return;
   if(state.pending){state.round++;build();}
   else if(!state.ready||p.RAM[0x434]!==state.width||p.RAM[0x435]!==state.height)build();
+  // Old NEW saves lack the native redraw metadata. Repair only ordinary ground,
+  // blocks and flames; hidden exits/items retain their original encoding.
+  for(let y=1;y<state.height;y++)for(let x=2;x<state.width;x++){
+   const address=0x44a+y*32+x,raw=p.RAM[address],kind=raw&31;
+   if(raw<32&&[2,6,10,11,12].includes(kind))p.RAM[address]=raw|0xc0;
+   const first=y*2*p.VDC[0].VScreenWidth+x*2;
+   if(kind===10&&p.VDC[0].VRAM[first]===0x300)for(let i=0;i<4;i++)p.VDC[0].VRAM[(y*2+(i>>1))*p.VDC[0].VScreenWidth+x*2+(i&1)]=state.tiles[10][i];
+  }
   const coords=camera();for(let i=0;i<4;i++)p.RAM[0x25+i]=coords[i];
  }
  return {state,update,configure(enabled,players=1,seed=crypto.getRandomValues(new Uint32Array(1))[0]){Object.assign(state,{enabled,seed,round:1,players,ready:false,pending:false,width:0,height:0,tiles:null,enemyTemplate:null});},restore(data){validateNewCampaign(data);Object.assign(state,structuredClone(data));}};

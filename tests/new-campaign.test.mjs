@@ -25,7 +25,16 @@ test('NEW campaign uses native monsters, pickups, collision, scrolling, bombs, l
  restoreState(p,save);crew.restore(extension);mode.restore(generator);Object.assign(p._campaignTracker,tracker);
  const map=generateChallengeMap(mode.state.seed,1,5),exit=map.exit,flags=p.RAM.slice(0xd98,0xdb8);for(let i=0;i<32;i++)p.RAM[0xd98+i]=0;p.RAM[0x44a+(exit.y-1)*32+exit.x]=10;const bomb=spawnBomb(p,exit.x,exit.y-1);p.RAM[0x8ef+bomb]=1;frames(p,190);assert.equal(tileKind(p,exit.x,exit.y),8,'a native explosion uncovers the generated hidden blue pad');for(let i=0;i<32;i++)p.RAM[0xd98+i]=flags[i];for(const e of enemies(p)){p.RAM[0xdd8+e.slot]=200;p.RAM[0xdb8+e.slot]=0;p.RAM[0xe18+e.slot]=24;p.RAM[0xdf8+e.slot]=0;}setPosition(exit.x*16+8,exit.y*16+8);p.RAM[0xd96]=1;frames(p,3);assert.equal(mode.state.pending,false,'living enemies keep the exit locked even with a stale native cleared flag');assert.equal(p.RAM[0x437],0);assert.equal(p.RAM[0x43a]&7,0);
  for(let i=0;i<32;i++)p.RAM[0xd98+i]=0;p.RAM[0xd96]=1;frames(p,3);assert.equal(mode.state.pending,true,'native exit requests the next generated map');mode.update();assert.equal(mode.state.round,2);assert.equal(rounds,2);assert.equal(enemies(p).length,24);assert.equal(p.RAM[0x43d],40);assert.equal(p.RAM[0x437],0);assert.deepEqual(p.RAM.slice(0xd8d,0xd90),[6,59,59],'each generated round receives a fresh seven-minute clock');
- // Original explosions still destroy blocks on the generated map.
- p.RAM[0x44a+32+5]=2;spawnBomb(p,4,1);p.RAM[0x8ef]=1;frames(p,190);assert.equal(tileKind(p,5,1),10);
+ // Flames remain visible, then both bomb floor and destroyed blocks return to
+ // their native green tile references, including beyond the original bounds.
+ const refs=(x,y)=>[0,1,2,3].map(i=>p.VDC[0].VRAM[(y*2+(i>>1))*p.VDC[0].VScreenWidth+x*2+(i&1)]);
+ for(let i=0;i<32;i++)p.RAM[0xd98+i]=0;
+ // Floor restoration is independent of primary-player damage in this fixture.
+ p.RAM[0x43a]=128;p.RAM[0x446]=255;p.RAM[0x447]=127;
+ for(const [x,y]of [[4,1],[24,19]]){
+  setPosition(0,0);p.RAM[0x44a+y*32+x]=0xca;p.RAM[0x44a+y*32+x+1]=0xc2;const b=spawnBomb(p,x,y);p.RAM[0x8ef+b]=1;frames(p,4);assert.ok([11,12].includes(tileKind(p,x,y)),'native flame remains active');frames(p,186);assert.equal(tileKind(p,x+1,y),10);assert.deepEqual(refs(x,y),mode.state.tiles[10],'bomb tile restores green ground');assert.deepEqual(refs(x+1,y),mode.state.tiles[10],'destroyed block restores green ground');
+ }
+ // A v0.3 save with blank floor references is repaired without hiding its exit.
+ const blank=0x44a+32+6;p.RAM[blank]=10;for(let i=0;i<4;i++)p.VDC[0].VRAM[(2+(i>>1))*p.VDC[0].VScreenWidth+12+(i&1)]=0x300+(i&1);setPosition(40,24);mode.update();assert.equal(p.RAM[blank],0xca);assert.deepEqual(refs(6,1),mode.state.tiles[10]);assert.equal(tileKind(p,generateChallengeMap(mode.state.seed,2,5).exit.x,generateChallengeMap(mode.state.seed,2,5).exit.y),4);
  const broken=structuredClone(mode.state);broken.enemyTemplate[9]=99;assert.throws(()=>validateNewCampaign(broken),/monster template/);
 });

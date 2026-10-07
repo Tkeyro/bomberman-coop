@@ -10,6 +10,7 @@ export const MENU_OPTIONS = [
 ];
 export const TITLE_SEQUENCE = [{frames:180},{frames:8,button:'RUN'},{frames:120}];
 const FIRST_Y=130,ROW_HEIGHT=14;
+const playerChoices=mode=>mode==='new'?[1,2,3,4,5,0]:[2,3,4,5,0];
 // Copyright glyphs are already embedded in the title's background tiles.
 function copyrightInk(v,x,y){
  const left=((v.HDS+v.HSW)<<3)+v.DrawBGIndex,worldX=x-left+v.VDCRegister[7];
@@ -29,8 +30,8 @@ export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=(
  function choose(){if(active)onSelect(MENU_OPTIONS[selected].mode,count);}
  function input(button){
   if(!active)return false;
-  if(button==='UP'||button==='DOWN'){selected=(selected+(button==='UP'?MENU_OPTIONS.length-1:1))%MENU_OPTIONS.length;if(MENU_OPTIONS[selected].mode!=='new')count=Math.max(2,count);announce();}
-  else if(button==='LEFT'||button==='RIGHT'){count=Math.min(5,Math.max(MENU_OPTIONS[selected].mode==='new'?1:2,count+(button==='LEFT'?-1:1)));announce();}
+  if(button==='UP'||button==='DOWN'){selected=(selected+(button==='UP'?MENU_OPTIONS.length-1:1))%MENU_OPTIONS.length;if(count!==0&&MENU_OPTIONS[selected].mode!=='new')count=Math.max(2,count);announce();}
+  else if(button==='LEFT'||button==='RIGHT'){const choices=playerChoices(MENU_OPTIONS[selected].mode),index=choices.indexOf(count);count=choices[Math.min(choices.length-1,Math.max(0,index+(button==='LEFT'?-1:1)))];announce();}
   else if(button==='RUN'||button==='SHOT1')choose();
   return true;
  }
@@ -58,7 +59,7 @@ export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=(
   const row=Math.floor((y-FIRST_Y)/ROW_HEIGHT),glyphLine=(y-FIRST_Y)%ROW_HEIGHT;
   let text,palette=0xc000;
   if(row>=0&&row<MENU_OPTIONS.length&&glyphLine>=0&&glyphLine<8){text=MENU_OPTIONS[row].label;if(MENU_OPTIONS[row].mode==='online'||(MENU_OPTIONS[row].mode==='load'&&!hasSave))palette=0;}
-  else if(y>=218&&y<226){text=`PLAYERS: ${count}  LEFT/RIGHT`;palette=0;}
+  else if(y>=218&&y<226){text=count===0?'AI ONLY - WATCH (4 BOTS)':`PLAYERS: ${count}  LEFT/RIGHT`;palette=0;}
   else return;
   const originalLine=v.BGLine.slice(),originalY=v.DrawBGLine;
   const start=(originalY>>3)*v.VScreenWidth,tiles=v.VRAM.slice(start,start+32);
@@ -82,11 +83,11 @@ export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=(
   if(active||blockPads())for(const pad of this.GamePad){pad[0]=pad[1]=pad[2]=0xbf;pad[3]=0xb0;}
  };
  return {
-  prepare(players=2){count=Math.min(5,Math.max(2,players));selected=0;active=false;rendering=true;departing=false;padHeld='';padFrames=0;},
-  open(players=2){count=Math.min(5,Math.max(2,players));selected=0;active=true;rendering=true;departing=false;padHeld='';padFrames=0;announce();},
+  prepare(players=2){count=players===0?0:Math.min(5,Math.max(2,players));selected=0;active=false;rendering=true;departing=false;padHeld='';padFrames=0;},
+  open(players=2){count=players===0?0:Math.min(5,Math.max(2,players));selected=0;active=true;rendering=true;departing=false;padHeld='';padFrames=0;announce();},
   leave(){active=false;departing=true;},
   close(){active=false;rendering=false;departing=false;},input,choose,
-  setCount(players){count=Math.min(5,Math.max(MENU_OPTIONS[selected].mode==='new'?1:2,players));if(active)announce();},
+  setCount(players){count=players===0?0:Math.min(5,Math.max(MENU_OPTIONS[selected].mode==='new'?1:2,players));if(active)announce();},
   setSave(available){hasSave=Boolean(available);if(active)announce();},
   pointer(y){if(!active||y<FIRST_Y||y>=FIRST_Y+MENU_OPTIONS.length*ROW_HEIGHT)return;selected=Math.floor((y-FIRST_Y)/ROW_HEIGHT);announce();choose();},
   get active(){return active;},get selected(){return selected;},get count(){return count;}
