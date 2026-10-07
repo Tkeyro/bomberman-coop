@@ -2,6 +2,8 @@
 
 Browser extension for **Bomberman (1990), TurboGrafx-16, USA**. Public source: [Tkeyro/bomberman-coop](https://github.com/Tkeyro/bomberman-coop). Each player supplies the same verified game file locally.
 
+**v0.4.3 gives Solo AI the original finite campaign life stock.** When its final life is lost, the original death music and fade finish and the main menu becomes usable again. Solo AI no longer receives a forced spare life on each defeat. Existing cooperative watch and online team retry rules are preserved.
+
 **v0.4.2 fixes reproduced online startup and pause/resume freezes.** Browser audio can no longer block snapshot synchronization, and guests keep authoritative frames that arrive while paused. Startup and pause status are visible, and incomplete startup reports a timeout. The idle demo is disabled while the custom menu is open. Original single-player Campaign now asks Human or AI before the world picker; AI watches one bot in the chosen world. Bots reject bombs and remote detonations whose blast would reach an exposed blue exit, including existing bomb chains.
 
 **v0.4.1 makes color selection visible above the game and inside the online lobby.** Click one of eight named colors before loading the ROM or while choosing your lobby settings. A lobby color change updates the roster and clears readiness. Online colors stay fixed after starting; this UI patch preserves the v0.4.0 online/save protocol.

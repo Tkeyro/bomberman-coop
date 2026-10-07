@@ -224,3 +224,10 @@ A two-app probe with native audio objects reproduces a visible arena frozen befo
 The native title bank-1 loop reads its idle countdown at PC 0xa5b6, RAM 0x13b8/0x13b9. The menu renews that counter only at expiry while its title cursor is present and it is not departing. Main, controller and world pages survive more than 1200 idle frames while retaining native title art and animation. Human/AI single-player selection precedes the world picker and launches one human or one watched bot in the chosen world.
 
 AI blast safety treats native grid kind 8 as an exposed portal and kind 4 as a safely uncovered exit. Placement, target selection and remote detonation reject direct or chained blasts reaching exposed portals, using actual bomb ranges and terrain stops. Checks use current terrain; human actions can still change a pending bomb's future blast path. Native human/admin bomb behavior remains available.
+
+
+## v0.4.3 finite Solo AI game over
+
+Native RAM 0x438 counts spare lives: a new campaign starts at 2. Defeat with one spare decrements to zero and enters bank-8 0x7cae, then the same-stage card/play sequence. Defeat with zero underflows to 255 and follows bank-0 PC 0xec8a to the native title, with death music 0x2a and title music 0x2b. The title sprite marker SATB[2] = 918 returns around 184 frames after defeat.
+
+The spectator only preserves a minimum spare life for cooperative watch/online retry sessions. Solo AI leaves the native life count intact. Its terminal branch marks a saved gameover phase; after the native title returns, a post-Run callback queues the app to clear the ended session and reopen the native main menu. Detection is outside the active-arena guard, since arena activity stops before the terminal branch. Remaining actor Extra Life pickups receive their existing revival attempt first. Human campaign, generated DLC and online team retry policy do not change.

@@ -113,5 +113,20 @@ test('ROM loader, native keyboard menu, paused inventory and save import/export 
   assert.equal(isCampaign(machine),true);assert.deepEqual([...machine.RAM.slice(0x84a,0x84c)],[1,0],'the selected 2-0 entry loads world2 at its first regular stage');assert.equal(elements.get('player-count').textContent,'1P');assert.equal(machine._newCampaign.enabled,false);
   await elements.get('open-menu-btn').click();for(let n=0;n<110;n++){clock+=50;nextFrame(clock);}await key('Enter');await key('ArrowDown');assert.match(elements.get('menu-status').textContent,/AI/);assert.equal(elements.get('player-count-select').value,'-1');await key('Enter');await key('ArrowDown');await key('Enter');await key('Space');window.listeners.keyup({code:'Space',preventDefault(){}});
   for(let n=0;n<970&&elements.get('player-count').textContent!=='1 AI';n++){clock+=50;nextFrame(clock);}assert.equal(elements.get('player-count').textContent,'1 AI');assert.deepEqual([...machine.RAM.slice(0x84a,0x84c)],[1,0]);assert.equal(machine._spectator.enabled,true);assert.equal(machine._newCampaign.enabled,false);await defeatAndRetry(1,false);
+  // Restoring a Solo AI save must retain the finite native life policy. The
+  // final defeat finishes the original ending, then exposes the usable title.
+  await elements.get('save-btn').click();const lastLife=await decodeSave(stored);
+  assert.equal(lastLife.session.mode,'solo');assert.equal(lastLife.session.count,-1);lastLife.state.RAM[0x438]=0;
+  for(const b of lastLife.session.companions.bots){b.alive=false;b.deathFrame=0;b.extraLives=0;b.target=null;b.route=[];}lastLife.session.spectator.finished=false;
+  await elements.get('save-input').listeners.change({target:{files:[await encodeSave(lastLife)],value:'x'}});assert.match(elements.get('save-status').textContent,/Save loaded/);await elements.get('pause-btn').click();
+  clock+=50;nextFrame(clock);assert.equal(machine._spectator.transition.phase,'dying');assert.equal(machine.RAM[0x438],0,'loading a Solo AI save cannot restore infinite retries');assert.match(elements.get('load-status').textContent,/no lives left/i);
+  for(let n=0;n<120&&!/1P - CAMPAIGN/.test(elements.get('menu-status').textContent);n++){clock+=50;nextFrame(clock);}
+  assert.match(elements.get('menu-status').textContent,/1P - CAMPAIGN/);assert.match(elements.get('load-status').textContent,/Game over/i);
+  assert.equal(machine.VDC[0].SATB[2],918,'game over reuses the native title instead of replaying the boot logo');assert.equal(machine._spectator.enabled,false);assert.equal(machine._spectator.transition,null);assert.equal(elements.get('pause-btn').textContent,'Pause');
+  const finalFrame=Number(elements.get('frame-count').textContent);for(let n=0;n<20;n++){clock+=50;nextFrame(clock);}
+  assert.ok(Number(elements.get('frame-count').textContent)>finalFrame,'the returned main menu keeps animating');assert.match(elements.get('menu-status').textContent,/1P - CAMPAIGN/);assert.equal(machine._spectator.enabled,false,'a finished Solo AI game does not spawn another bot');
+  await elements.get('save-btn').click();assert.match(elements.get('save-status').textContent,/Start a game before saving/,'the ended session cannot be saved as active gameplay');
+  await key('Enter');assert.match(elements.get('menu-status').textContent,/HUMAN/);await key('ArrowDown');assert.match(elements.get('menu-status').textContent,/AI/);await key('Enter');assert.match(elements.get('menu-status').textContent,/1-0/);
+  assert.equal(machine._spectator.enabled,false,'choosing the next game remains a menu action until its world is selected');
  }finally{PCE.prototype.SetCanvas=setCanvas;for(const [key,value]of originals){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}}
 });
