@@ -27,7 +27,7 @@ export function createSpectator(p,{getBots=()=>[]}={}){
   if(!state.enabled||!isCampaign(p))return;
   // Keep the unused native controller outside the arena. Only AI actors play.
   p.RAM[0x43d]=p.RAM[0x43e]=p.RAM[0x43f]=p.RAM[0x440]=0;
-  const bots=getBots();state.finished=bots.length>0&&bots.every(b=>!b.alive&&b.deathFrame>=DEATH_FRAMES);
+  const bots=getBots();state.finished=bots.length>0&&bots.every(b=>!b.alive&&!b.extraLives&&b.deathFrame>=DEATH_FRAMES);
   const coords=camera();for(let i=0;i<4;i++)p.RAM[0x25+i]=coords[i];
  }
  p.Run=function(){update();return run.call(this);};

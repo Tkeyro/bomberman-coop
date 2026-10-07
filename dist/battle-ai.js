@@ -1,4 +1,4 @@
-import {findPath,tileKind,walkable,blastCells,dangerCells,bombs,enemies,validTile,validRoute} from './campaign.js';
+import {findPath,tileKind,walkable,blastCells,dangerCells,bombs,enemies,validTile,validRoute,pickups,beneficialPickup} from './campaign.js';
 const key=(x,y)=>`${x},${y}`;
 const buttons=['UP','RIGHT','DOWN','LEFT','SHOT1','SHOT2','RUN','SELECT'];
 export function battlePosition(p,port){return {x:p.RAM[0x3cc+port]|p.RAM[0x3d1+port]<<8,y:p.RAM[0x3d6+port]|p.RAM[0x3db+port]<<8};}
@@ -11,25 +11,26 @@ export function createBattleAI(p) {
  function update(){
   if(!state.enabled)return;
   release(true);if(!activeBattle(p)){state.plans={};return;}
-  state.steps++;const danger=dangerCells(p),foes=enemies(p);
+  state.steps++;const danger=dangerCells(p),foes=enemies(p),items=pickups(p).filter(beneficialPickup),goals=new Set(items.map(i=>key(i.x,i.y))),skulls=new Set(pickups(p).filter(i=>i.type===8).map(i=>key(i.x,i.y)));
   for(let port=state.spectator?0:1;port<state.count;port++){
    if(p.RAM[0x3bd+port]!==0)continue;
    const position=battlePosition(p,port),tx=Math.floor(position.x/16),ty=Math.floor(position.y/16),start={x:tx,y:ty};
    const plan=state.plans[port]??={target:null,route:[],cooldown:0};if(plan.cooldown)plan.cooldown--;
    if(plan.target&&!walkable(p,plan.target.x,plan.target.y)){plan.target=null;plan.route=[];}
    if(!plan.target){
-    if(danger.has(key(tx,ty))){plan.route=findPath(p,start,n=>!danger.has(key(n.x,n.y)),{allowDanger:true,maxSteps:7})??[];}
+    if(danger.has(key(tx,ty))){plan.route=findPath(p,start,n=>!danger.has(key(n.x,n.y)),{allowDanger:true,maxSteps:7,blocked:skulls})??[];}
     else {
      const range=p.RAM[0x3ef+port]||2,blast=blastCells(p,tx,ty,range);
      const opponents=Array.from({length:state.count},(_,other)=>other).filter(other=>other!==port&&p.RAM[0x3bd+other]===0).map(other=>battlePosition(p,other));
      const useful=[[1,0],[-1,0],[0,1],[0,-1]].some(([dx,dy])=>[2,3,4].includes(tileKind(p,tx+dx,ty+dy)))||[...foes,...opponents].some(e=>blast.has(key(Math.floor(e.x/16),Math.floor(e.y/16))));
      const centered=Math.abs(position.x-(tx*16+8))<2&&Math.abs(position.y-(ty*16+8))<2;
-     if(centered&&useful&&!plan.cooldown&&!bombs(p).some(b=>b.x===tx&&b.y===ty)){
+     const pickupRoute=findPath(p,start,n=>goals.has(key(n.x,n.y)),{danger,blocked:skulls});if(pickupRoute?.length)plan.route=pickupRoute;
+     if(!pickupRoute?.length&&!pickups(p).some(i=>blast.has(key(i.x,i.y)))&&centered&&useful&&!plan.cooldown&&!bombs(p).some(b=>b.x===tx&&b.y===ty)){
       const future=new Set([...danger,...blast]);
-      const escape=findPath(p,start,n=>!future.has(key(n.x,n.y)),{allowDanger:true,maxSteps:5});
+      const escape=findPath(p,start,n=>!future.has(key(n.x,n.y)),{allowDanger:true,maxSteps:Math.max(5,range+1),blocked:skulls});
       if(escape?.length){p.SetButtonSHOT1(port);state.bombsPlaced++;plan.cooldown=180;plan.route=escape;}
      }
-     if(!plan.route.length)plan.route=findPath(p,start,n=>[[1,0],[-1,0],[0,1],[0,-1]].some(([dx,dy])=>[2,3,4].includes(tileKind(p,n.x+dx,n.y+dy)))||[...foes,...opponents].some(e=>blastCells(p,n.x,n.y,range).has(key(Math.floor(e.x/16),Math.floor(e.y/16)))),{danger})??[];
+     if(!plan.route.length)plan.route=findPath(p,start,n=>[[1,0],[-1,0],[0,1],[0,-1]].some(([dx,dy])=>[2,3,4].includes(tileKind(p,n.x+dx,n.y+dy)))||[...foes,...opponents].some(e=>blastCells(p,n.x,n.y,range).has(key(Math.floor(e.x/16),Math.floor(e.y/16)))),{danger,blocked:skulls})??[];
     }
     plan.target=plan.route.shift()??null;
    }
