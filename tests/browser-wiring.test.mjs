@@ -15,6 +15,8 @@ test('ROM loader, native keyboard menu, paused inventory and save import/export 
  globalThis.window={listeners:{},addEventListener(name,fn){this.listeners[name]=fn;}};globalThis.requestAnimationFrame=fn=>{nextFrame=fn;};
  // Storage intentionally unavailable: app must retain export/import fallback.
  globalThis.indexedDB=undefined;
+ const {PCE}=await import('../dist/vendor/pce.js'),setCanvas=PCE.prototype.SetCanvas;let machine;
+ PCE.prototype.SetCanvas=function(id){machine=this;return setCanvas.call(this,id);};
  try{
   await import('../dist/app.js');const bytes=fs.readFileSync(process.env.BOMBERMAN_TEST_ROM);
   await elements.get('rom-input').listeners.change({target:{files:[{size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)}]}});
@@ -26,7 +28,13 @@ test('ROM loader, native keyboard menu, paused inventory and save import/export 
   await key('ArrowDown');await key('Enter');assert.match(elements.get('load-status').textContent,/not connected/);assert.equal(elements.get('mode-label').textContent,'SOLO');
   await key('ArrowDown');await key('ArrowDown');await key('Enter');assert.match(elements.get('load-status').textContent,/No browser save/);
   await key('ArrowDown');await key('ArrowDown');await key('ArrowDown');await key('Enter');assert.equal(document.activeElement,elements.get('game-canvas'));assert.equal(elements.get('start-btn').disabled,true);
-  for(let n=0;n<970;n++){clock+=50;nextFrame(clock);} // original intro + first active stage
+  await key('Space');assert.match(elements.get('load-status').textContent,/Skipping/);
+  for(let n=0;n<400&&!/Game ready/.test(elements.get('load-status').textContent);n++){clock+=50;nextFrame(clock);window.listeners.keydown({code:'Space',repeat:true,preventDefault(){}});}
+  assert.match(elements.get('load-status').textContent,/Game ready/);assert.equal(machine.RAM.slice(0x84f,0x859).some(v=>v&128),false,'holding intro-skip Space must not place a human bomb');assert.ok(machine.Keybord[0][0]&1);
+  window.listeners.keyup({code:'Space',preventDefault(){}});
+  await key('KeyB');await key('KeyX');assert.equal(machine.Keybord[0][0]&2,0);
+  window.listeners.keyup({code:'KeyB',preventDefault(){}});assert.equal(machine.Keybord[0][0]&2,0,'X keeps Button II held after B is released');
+  window.listeners.keyup({code:'KeyX',preventDefault(){}});assert.equal(machine.Keybord[0][0]&2,2);
   assert.equal(elements.get('menu-status').textContent,'');assert.equal(elements.get('player-count').textContent,'2P');
   let prevented=false;window.listeners.keydown({code:'ArrowRight',preventDefault(){prevented=true;}});assert.equal(prevented,true);elements.get('game-canvas').listeners.blur();
   await elements.get('admin-btn').click();assert.equal(elements.get('admin-dialog').open,true);assert.equal(elements.get('pause-btn').textContent,'Resume');assert.equal(elements.get('item-grid').children.length,15);assert.ok(elements.get('enemy-grid').children.length>0);assert.ok(elements.get('admin-map').children.length>100);
@@ -40,6 +48,9 @@ test('ROM loader, native keyboard menu, paused inventory and save import/export 
    await elements.get('save-input').listeners.change({target:{files:[exported],value:'x'}});assert.match(elements.get('save-status').textContent,/Save loaded/);assert.equal(elements.get('pause-btn').textContent,'Resume');assert.equal(elements.get('color-select').value,'orange');assert.equal(elements.get('player-count').textContent,'2P');
    const restored=elements.get('frame-count').textContent;
    await elements.get('save-input').listeners.change({target:{files:[new Blob(['broken'])],value:'x'}});assert.match(elements.get('save-status').textContent,/damaged/);assert.equal(elements.get('frame-count').textContent,restored);
+   const {decodeSave,encodeSave}=await import('../dist/save-state.js'),legacy=await decodeSave(exported);delete legacy.session.openingIntro;
+   await elements.get('save-input').listeners.change({target:{files:[await encodeSave(legacy)],value:'x'}});assert.match(elements.get('save-status').textContent,/Save loaded/);
+   await elements.get('pause-btn').click();await key('Space');assert.equal(machine.Keybord[0][0]&1,0,'an older gameplay save must retain Space bomb placement');window.listeners.keyup({code:'Space',preventDefault(){}});await elements.get('pause-btn').click();
   }finally{URL.createObjectURL=oldCreate;setTimeout(()=>{URL.revokeObjectURL=oldRevoke;},1100);}
   const savedFrame=elements.get('frame-count').textContent;
   await elements.get('open-menu-btn').click();assert.match(elements.get('menu-status').textContent,/Opening/);assert.equal(elements.get('pause-btn').textContent,'Continue game');
@@ -67,5 +78,5 @@ test('ROM loader, native keyboard menu, paused inventory and save import/export 
   await elements.get('save-input').listeners.change({target:{files:[await encodeSave(defeat)],value:'x'}});await elements.get('pause-btn').click();
   for(let n=0;n<40;n++){clock+=50;nextFrame(clock);}assert.match(elements.get('load-status').textContent,/Retrying NEW stage 1 with 4 bots/);assert.equal(elements.get('pause-btn').textContent,'Pause');assert.equal(elements.get('player-count').textContent,'4 AI');assert.match(elements.get('mode-label').textContent,/NEW.*STAGE 1/);assert.equal(elements.get('player-count-select').value,'-4');
   for(const bots of [1,2,3]){await elements.get('open-menu-btn').click();for(let n=0;n<110;n++){clock+=50;nextFrame(clock);}await key('ArrowDown');elements.get('player-count-select').value=String(-bots);elements.get('player-count-select').listeners.change({target:elements.get('player-count-select')});await key('Enter');for(let n=0;n<970&&elements.get('player-count').textContent!==`${bots} AI`;n++){clock+=50;nextFrame(clock);}assert.equal(elements.get('player-count').textContent,`${bots} AI`);assert.equal(elements.get('player-count-select').value,String(-bots));}
- }finally{for(const [key,value]of originals){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}}
+ }finally{PCE.prototype.SetCanvas=setCanvas;for(const [key,value]of originals){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}}
 });

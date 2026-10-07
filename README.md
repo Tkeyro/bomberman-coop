@@ -2,14 +2,14 @@
 
 Browser extension for **Bomberman (1990), TurboGrafx-16, USA**. The long-term goal is people on separate computers cooperating in the original campaign.
 
-**v0.3.3 repairs leftover NEW pickup terrain, adds native bot footsteps/death sounds, retries defeated NEW watch teams and predicts approaching monsters.** Watching 1–4 bots, individual teammate upgrades, generated maps, matching lives-icon colors, exact-position saves, a paused campaign inventory and original Battle with AI opponents remain available. Online rooms are not implemented. Campaign teammates are independent extension actors rendered from the ROM's loaded sprites; their bombs, block destruction and enemy kills use the original game engine. They are not additional native campaign controller ports.
+**v0.3.4 adds B for remote detonation and Space to skip the opening cutscene.** Watching 1–4 bots, individual teammate upgrades, generated maps, matching lives-icon colors, exact-position saves, a paused campaign inventory and original Battle with AI opponents remain available. Online rooms are not implemented. Campaign teammates are independent extension actors rendered from the ROM's loaded sprites; their bombs, block destruction and enemy kills use the original game engine. They are not additional native campaign controller ports.
 
 ## Play
 
 1. Serve `dist/`, for example `python3 -m http.server 8080 --directory dist`.
 2. Open `http://localhost:8080` and load your local `Bomberman (USA).pce`.
 3. Choose your color. The original title screen opens automatically. Use **Up/Down** to select **1P - SOLO**, **1-5P - NEW**, **2-5P - CAMPAIGN**, or **2-5P - BATTLE (A.I)**, **Left/Right** to choose players (1–5 in NEW, 2–5 in the other multiplayer modes), and **Enter** to start. You can also click a menu row. Campaign uses local AI teammates; Battle uses native controller ports driven by AI.
-4. Campaign retains the original opening introduction (about 40 seconds). The selected color includes the rear-facing introduction pose.
+4. Campaign retains the original opening introduction (about 40 seconds). Press **Space** to skip it, including during the opening fade; holding the skip key will not place a bomb when gameplay starts. The selected color includes the rear-facing introduction pose.
 
 The six choices appear inside the original title screen using the ROM's loaded font, native red cursor and landscape. There is no web menu overlay. C-Link and password choices are hidden from the first title-menu frame, including startup and departure. The original copyright glyphs sit eight game pixels lower to leave room below the player-count hint. **2-5P - BATTLE (Online)** is dimmed and displays an unavailable message until online rooms exist. **LOAD SAVE** restores the latest browser save paused after loading the ROM. The original PASSWORD option was a stage/round code; the new save controls preserve the exact emulator and AI state instead.
 
@@ -20,10 +20,13 @@ The six choices appear inside the original title screen using the ROM's loaded f
 | Main menu choice / player count / start | Up/Down / Left/Right / Enter |
 | Move | Arrows / WASD |
 | Place bomb | Space |
-| Button II | X |
+| Remote detonation / Button II | B or X |
+| Skip opening cutscene | Space |
 | Run / advance Battle results | Enter |
 | Select | Shift |
 | Paused campaign inventory | F2 or Admin button |
+
+Collect **Remote Control** first. Your bombs then wait for **B** or **X** (native controller Button II), which detonates them one at a time in placement order. AI teammates control their own bombs.
 
 Click the game screen to focus keyboard controls. Losing focus releases held keys; switching windows pauses play. Browser audio, fullscreen and physical gamepad testing remain outstanding.
 
@@ -76,7 +79,7 @@ Admin privileges apply to the local browser session; this is not an online accou
 BOMBERMAN_TEST_ROM=/absolute/path/to/game.pce npm test
 ```
 
-Checks cover revision rejection, palette restoration and suit colors, rear-facing intro, native menu font/cursor pixels and navigation, original campaign controls, lives-icon recoloring, generated map connectivity/scrolling/exit progression, native item pickup/monster spawning, independent bomb inventories and monster avoidance, independent AI block clearing and enemy kills, native Battle actors/controllers/bombs, exposed-exit stage clear, and deterministic emulator/AI save replay. Power-up checks cover collection priority, visible-item protection, skull avoidance, individual upgrades, extended native blasts, remote detonation, pass abilities, vest expiry, extra-life revival and upgraded save replay. Additional checks cover repeated blasts on collected/stale pickup terrain, native PSG step/death output and pending-audio replay, predictive monster retreat and cleared fire groups on retry. A mocked DOM integration test exercises keyboard menu/admin/save wiring, all four watch counts, LOAD SAVE, returning from the menu and an automatic NEW retry after loading a dying team; it is **not real browser QA**. Remaining browser checks include audible playback, layout, fullscreen, real gamepads, mobile and long sessions.
+Checks cover revision rejection, palette restoration and suit colors, rear-facing intro, native menu font/cursor pixels and navigation, original campaign controls, lives-icon recoloring, generated map connectivity/scrolling/exit progression, native item pickup/monster spawning, independent bomb inventories and monster avoidance, independent AI block clearing and enemy kills, native Battle actors/controllers/bombs, exposed-exit stage clear, and deterministic emulator/AI save replay. Power-up checks cover collection priority, visible-item protection, skull avoidance, individual upgrades, extended native blasts, remote detonation, pass abilities, vest expiry, extra-life revival and upgraded save replay. Additional checks cover repeated blasts on collected/stale pickup terrain, native PSG step/death output and pending-audio replay, predictive monster retreat and cleared fire groups on retry. A mocked DOM integration test exercises keyboard menu/admin/save wiring, all four watch counts, LOAD SAVE, returning from the menu an automatic NEW retry after loading a dying team, early/held Space intro skipping, and B/X shared-button release; it is **not real browser QA**. Native checks also cover queued intro-skip save replay, normal bomb timers and the human Remote Control pickup, waiting bombs, ordered detonation and separate AI/enemy bombs. Remaining browser checks include audible playback, layout, fullscreen, real gamepads, mobile and long sessions.
 
 Local research helpers:
 

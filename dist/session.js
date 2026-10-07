@@ -60,7 +60,7 @@ export function installColorSelector(pce) {
 export const KEY_BINDINGS = {
   ArrowUp:[0,'UP'], KeyW:[0,'UP'], ArrowDown:[0,'DOWN'], KeyS:[0,'DOWN'],
   ArrowLeft:[0,'LEFT'], KeyA:[0,'LEFT'], ArrowRight:[0,'RIGHT'], KeyD:[0,'RIGHT'],
-  Space:[0,'SHOT1'], KeyX:[0,'SHOT2'], Enter:[0,'RUN'], ShiftLeft:[0,'SELECT'], ShiftRight:[0,'SELECT'],
+  Space:[0,'SHOT1'], KeyB:[0,'SHOT2'], KeyX:[0,'SHOT2'], Enter:[0,'RUN'], ShiftLeft:[0,'SELECT'], ShiftRight:[0,'SELECT'],
   KeyI:[1,'UP'], KeyK:[1,'DOWN'], KeyJ:[1,'LEFT'], KeyL:[1,'RIGHT'],
   KeyO:[1,'SHOT1'], KeyP:[1,'SHOT2'], Digit2:[1,'RUN'], Digit1:[1,'SELECT']
 };
