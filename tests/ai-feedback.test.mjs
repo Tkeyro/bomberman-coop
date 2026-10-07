@@ -18,7 +18,7 @@ test('NEW restores collected pickup terrain and stale markers for repeated nativ
   const bomb=spawnBomb(p,origin,row,{automatic:true});p.RAM[0x8ef+bomb]=1;run(8);assert.ok([11,12].includes(tileKind(p,24,row)));assert.equal(tileKind(p,25,row),11,'fire crosses the former pickup');run(182);assert.equal(tileKind(p,26,row),10,'the native blast destroys the block beyond it');assert.deepEqual(refs(24,row),mode.state.tiles[10]);assert.deepEqual(refs(26,row),mode.state.tiles[10]);
  }
  // Pending fire groups from the old attempt must not burn the retried map.
- const native=spawnBomb(p,22,row,{automatic:true});p.RAM[0x8ef+native]=1;run(8);assert.ok(p.RAM.slice(0x96d,0xa1c).some(v=>v&128));assert.equal(mode.retry(),true);assert.equal(mode.state.round,1);assert.ok(p.RAM.slice(0x96d,0xa1c).every(v=>v===0));run(8);assert.equal(tileKind(p,4,1),10);assert.ok(enemies(p).length>0);
+ const native=spawnBomb(p,22,row,{automatic:true});p.RAM[0x8ef+native]=1;run(8);assert.ok(p.RAM.slice(0x96d,0xa1c).some(v=>v&128));assert.equal(mode.retry(),true);assert.equal(mode.state.round,1);assert.equal(mode.state.transition.phase,'dying');for(let i=0;i<700&&mode.state.transition;i++)run(1);assert.equal(mode.state.transition,null);assert.ok(p.RAM.slice(0x96d,0xa1c).every(v=>v===0));run(8);assert.equal(tileKind(p,4,1),10);assert.ok(enemies(p).length>0);
 });
 test('bot steps and death use the native audible effects, with queued audio preserved in saves',{skip:!rom},()=>{
  const p=createMachine(fs.readFileSync(rom)),crew=createCompanions(p);boot(p);noMonsters(p);p.RAM[0x43d]=p.RAM[0x43f]=0;p.RAM[0x44a+32+5]=0xca;

@@ -1,4 +1,4 @@
-import {isCampaign,tileKind,enemies,spawnEnemy,spawnItem,playerPosition,pickups,restoreFloor} from './campaign.js';
+import {isCampaign,tileKind,enemies,spawnEnemy,spawnItem,playerPosition,pickups,restoreFloor,installCampaignTracker} from './campaign.js';
 const ENEMY_BASES=[0xd98,0xdb8,0xdd8,0xdf8,0xe18,0xe38,0xe58,0xe78,0xe98,0xeb8,0xed8,0xef8,0xf18,0xf38,0xf58,0xf78];
 function random(seed){let value=seed>>>0;return()=>{value=(Math.imul(value,1664525)+1013904223)>>>0;return value/4294967296;};}
 function shuffle(values,rng){for(let i=values.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[values[i],values[j]]=[values[j],values[i]];}return values;}
@@ -16,21 +16,56 @@ export function generateChallengeMap(seed,round,players=1){
  return {width,height,cells,exit,monsters,items};
 }
 export function createNewCampaign(p,{onRound=()=>{},getFocus=()=>playerPosition(p)}={}){
- const state={enabled:false,seed:1,round:1,players:1,ready:false,pending:false,width:0,height:0,tiles:null,enemyTemplate:null};
+ const state={enabled:false,seed:1,round:1,players:1,ready:false,pending:false,transition:null,width:0,height:0,tiles:null,enemyTemplate:null};
  p._newCampaign=state;
- const set=p.Set,run=p.Run;
+ const tracker=installCampaignTracker(p),set=p.Set,run=p.Run,cpu=p.CPURun,get=p.Get;
+ function advance(){
+  if(state.transition)return state.transition.kind==='advance';
+  if((p.RAM[0x43a]&7)||!p.RAM[0xd96]||enemies(p).length)return false;
+  state.pending=true;state.transition={kind:'advance',phase:'clearing',targetRound:Math.min(1000000,state.round+1)};return true;
+ }
+ function dying(){state.pending=false;state.transition={kind:'retry',phase:'dying',targetRound:state.round};}
  function camera(){const pos=getFocus(),x=Math.max(8,Math.min(state.width*16-256,pos.x-120)),y=Math.max(0,Math.min(state.height*16-208,pos.y-104));return [Math.floor(x)&255,Math.floor(x)>>8,Math.floor(y)&255,Math.floor(y)>>8];}
  p.Set=function(address,value){
   if(state.enabled&&state.ready&&isCampaign(this)){
    const physical=this.MPR[address>>13]|(address&8191),offset=physical&8191;
    if(physical>=0x1f0000&&physical<0x1f8000){
     if(offset>=0x25&&offset<=0x28)value=camera()[offset-0x25];
-    if(offset===0x437&&value===1){if(!(this.RAM[0x43a]&7)&&this.RAM[0xd96]&&enemies(this).length===0)state.pending=true;value=0;}
+    if(offset===0x437&&value===1&&!advance())value=0;
    }
   }
   return set.call(this,address,value);
  };
- p.Run=function(){if(state.enabled&&state.ready&&this.RAM[0x437]===1){if(!(this.RAM[0x43a]&7)&&this.RAM[0xd96]&&enemies(this).length===0)state.pending=true;this.RAM[0x437]=0;}return run.call(this);};
+ p.Run=function(){
+  if(state.enabled&&state.ready&&!state.transition){
+   if(this.RAM[0x437]===1&&!advance())this.RAM[0x437]=0;
+   if(!state.transition&&(this.RAM[0x43a]&1))dying();
+  }
+  return run.call(this);
+ };
+ // Reuse the native clear/death music, fades and stage announcement. Reload
+ // the opening region's assets, then replace its map at the first play frame.
+ p.CPURun=function(){
+  const bank=this.MPR[this.PC>>13]>>13;
+  if(state.enabled){
+   if(bank===8&&state.transition&&((this.PC===0x7ca2&&state.transition.kind==='advance')||(this.PC===0x7cae&&state.transition.kind==='retry'))){
+    state.transition.phase='loading';state.ready=false;this.RAM[0x84a]=this.RAM[0x84b]=this.RAM[0x143f]=0;
+   }
+   if(bank===9&&this.PC===0x83b0&&!(this.RAM[0x43a]&7)&&(!state.ready||state.transition?.phase==='loading')){
+    tracker.last=tracker.frame;
+    if(state.transition)state.round=state.transition.targetRound;
+    build();
+   }
+  }
+  return cpu.call(this);
+ };
+ p.Get=function(address){
+  if(state.enabled&&this.MPR[4]===9*8192&&this.PC===0x816c&&(address===0x284a||address===0x284b)){
+   const round=(state.transition?.targetRound??state.round)-1;
+   return address===0x284a?Math.floor(round/8)%8:round%8;
+  }
+  return get.call(this,address);
+ };
  function captureTemplates(){
   const v=p.VDC[0],tiles={};for(let y=1;y<p.RAM[0x435];y++)for(let x=2;x<p.RAM[0x434];x++){
    const kind=tileKind(p,x,y);if([1,2,10].includes(kind)&&!tiles[kind])tiles[kind]=[v.VRAM[y*2*v.VScreenWidth+x*2],v.VRAM[y*2*v.VScreenWidth+x*2+1],v.VRAM[(y*2+1)*v.VScreenWidth+x*2],v.VRAM[(y*2+1)*v.VScreenWidth+x*2+1]];
@@ -52,12 +87,15 @@ export function createNewCampaign(p,{onRound=()=>{},getFocus=()=>playerPosition(
   p.RAM[0xd98+31]=128;
   for(const cell of map.monsters)spawnEnemy(p,31,cell.x,cell.y);p.RAM[0xd98+31]=0;p.RAM[0xd96]=0;
   for(const item of map.items)spawnItem(p,item.type,item.x,item.y);
-  state.ready=true;state.pending=false;const coords=camera();for(let i=0;i<4;i++)p.RAM[0x25+i]=coords[i];onRound(state.round);
+  state.ready=true;state.pending=false;state.transition=null;const coords=camera();for(let i=0;i<4;i++)p.RAM[0x25+i]=coords[i];onRound(state.round);
  }
  function update(){
-  if(!state.enabled||!isCampaign(p)||(p.RAM[0x43a]&7))return;
-  if(state.pending){state.round++;build();}
-  else if(!state.ready||p.RAM[0x434]!==state.width||p.RAM[0x435]!==state.height)build();
+  if(!state.enabled||!isCampaign(p))return;
+  if(state.ready&&!state.transition&&(p.RAM[0x43a]&1))dying();
+  if(state.transition||(p.RAM[0x43a]&7))return;
+  // Older saves can contain the former immediately queued round change.
+  if(state.pending){if(advance())p.RAM[0x437]=1;return;}
+  if(!state.ready||p.RAM[0x434]!==state.width||p.RAM[0x435]!==state.height)build();
   // Restore ordinary terrain flags and cleared pickup markers in older saves.
   // Live pickups and hidden exits/items retain their native encoding.
   const liveItems=new Set(pickups(p).map(item=>item.y*32+item.x));
@@ -70,11 +108,16 @@ export function createNewCampaign(p,{onRound=()=>{},getFocus=()=>playerPosition(
   }
   const coords=camera();for(let i=0;i<4;i++)p.RAM[0x25+i]=coords[i];
  }
- return {state,update,retry(){if(!state.enabled||!state.ready||!isCampaign(p)||(p.RAM[0x43a]&7))return false;build();return true;},configure(enabled,players=1,seed=crypto.getRandomValues(new Uint32Array(1))[0]){Object.assign(state,{enabled,seed,round:1,players,ready:false,pending:false,width:0,height:0,tiles:null,enemyTemplate:null});},restore(data){validateNewCampaign(data);Object.assign(state,structuredClone(data));}};
+ return {state,update,retry(){
+  if(!state.enabled||!state.ready||state.transition||!isCampaign(p)||(p.RAM[0x43a]&7)||p.RAM[0x437])return false;
+  // The hidden native player drives the AI team's normal defeat sequence.
+  p.RAM[0x438]=Math.max(1,p.RAM[0x438]);p.RAM[0x43a]|=1;p.RAM[0x43c]=0;dying();return true;
+ },configure(enabled,players=1,seed=crypto.getRandomValues(new Uint32Array(1))[0]){Object.assign(state,{enabled,seed,round:1,players,ready:false,pending:false,transition:null,width:0,height:0,tiles:null,enemyTemplate:null});},restore(data){validateNewCampaign(data);Object.assign(state,{transition:null},structuredClone(data));}};
 }
 export function validateNewCampaign(s){
  const integer=(n,max)=>Number.isSafeInteger(n)&&n>=0&&n<=max;
- if(!s||Object.keys(s).some(k=>!['enabled','seed','round','players','ready','pending','width','height','tiles','enemyTemplate'].includes(k))||typeof s.enabled!=='boolean'||typeof s.ready!=='boolean'||typeof s.pending!=='boolean'||!integer(s.seed,4294967295)||!integer(s.round,1000000)||s.round<1||!integer(s.players,5)||s.players<1||!integer(s.width,31)||!integer(s.height,29))throw new Error('Invalid NEW campaign save.');
+ if(!s||Object.keys(s).some(k=>!['enabled','seed','round','players','ready','pending','transition','width','height','tiles','enemyTemplate'].includes(k))||typeof s.enabled!=='boolean'||typeof s.ready!=='boolean'||typeof s.pending!=='boolean'||!integer(s.seed,4294967295)||!integer(s.round,1000000)||s.round<1||!integer(s.players,5)||s.players<1||!integer(s.width,31)||!integer(s.height,29))throw new Error('Invalid NEW campaign save.');
+ const t=s.transition;if(t!==undefined&&t!==null&&(!t||Object.keys(t).some(k=>!['kind','phase','targetRound'].includes(k))||!s.enabled||!['advance','retry'].includes(t.kind)||!(t.kind==='advance'?['clearing','loading']:['dying','loading']).includes(t.phase)||!integer(t.targetRound,1000000)||t.targetRound!==(t.kind==='advance'?Math.min(1000000,s.round+1):s.round)||s.pending!==(t.kind==='advance')||s.ready!==(t.phase!=='loading')))throw new Error('Invalid NEW round transition in save.');
  if(s.ready&&(!s.tiles||!s.enemyTemplate||s.width<27||s.height<21))throw new Error('Incomplete NEW campaign save.');
  if(s.tiles!==null&&(!s.tiles||![1,2,10].every(k=>Array.isArray(s.tiles[k])&&s.tiles[k].length===4&&s.tiles[k].every(t=>integer(t,65535)))))throw new Error('Invalid NEW map tile references.');
  if(s.enemyTemplate!==null&&(!Array.isArray(s.enemyTemplate)||s.enemyTemplate.length!==16||!s.enemyTemplate.every(t=>integer(t,255))||s.enemyTemplate[9]>=23))throw new Error('Invalid NEW monster template.');

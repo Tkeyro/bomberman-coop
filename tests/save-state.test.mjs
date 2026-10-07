@@ -10,6 +10,7 @@ test('full save restores deterministic execution without embedding ROM',{skip:!r
  const blob=await encodeSave(save),decoded=await decodeSave(blob);console.log('Compressed save bytes:',blob.size);
  assert.deepEqual(restoreState(p,decoded),save.session);
  frames(p,60,[[0,'RIGHT']]);assert.deepEqual(p.RAM,expectedRAM);assert.deepEqual(p.ImageData.data,expectedPixels);assert.equal(p.PC,expectedPC);
+ const word=decoded.state.Palette[0];decoded.state.Palette[0]=65536;assert.throws(()=>restoreState(p,decoded),/memory/);decoded.state.Palette[0]=word;
  const before=[...p.RAM];decoded.state.VDC[0].DrawLineWidth=0;assert.throws(()=>restoreState(p,decoded),/video/);assert.deepEqual(p.RAM,before);
  decoded.rom='wrong';assert.throws(()=>restoreState(p,decoded),/incompatible/);
 });

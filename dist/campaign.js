@@ -71,11 +71,51 @@ function monsterCells(p,foes,radius=24){
 }
 function foreseeMonsters(p,foes,state){
  const previous=new Map(state.foeMotion.map(e=>[e.slot,e]));
- state.foeMotion=foes.map(e=>{const old=previous.get(e.slot),dx=old?e.x-old.x:0,dy=old?e.y-old.y:0,continuous=old&&old.type===e.type&&Math.abs(dx)<=2&&Math.abs(dy)<=2;return {...e,vx:continuous?old.vx*.6+dx*.4:0,vy:continuous?old.vy*.6+dy*.4:0};});
+ state.foeMotion=foes.map(e=>{const old=previous.get(e.slot),dx=old?e.x-old.x:0,dy=old?e.y-old.y:0,continuous=old&&old.type===e.type&&Math.abs(dx)<=2&&Math.abs(dy)<=2;return {...e,vx:continuous?old.vx*.6+dx*.4:0,vy:continuous?old.vy*.6+dy*.4:0,speedX:continuous?(old.speedX??Math.abs(old.vx))*.9+Math.abs(dx)*.1:0,speedY:continuous?(old.speedY??Math.abs(old.vy))*.9+Math.abs(dy)*.1:0};});
  const predicted=[...foes];for(const e of state.foeMotion){if(Math.abs(e.vx)+Math.abs(e.vy)<.05)continue;let x=e.x,y=e.y;for(let t=8;t<=24;t+=8){const nx=x+e.vx*8,ny=y+e.vy*8;if(!walkable(p,Math.floor(nx/16),Math.floor(ny/16)))break;x=nx;y=ny;predicted.push({...e,x,y});}}
  return predicted;
 }
-function attackCells(p,foes){const cells=new Set();for(const foe of foes){const queue=[{x:Math.floor(foe.x/16),y:Math.floor(foe.y/16),steps:0}],seen=new Set();for(let i=0;i<queue.length;i++){const n=queue[i],k=key(n.x,n.y);if(seen.has(k))continue;seen.add(k);cells.add(k);if(n.steps===3)continue;for(const [dx,dy]of NEIGHBORS)if(walkable(p,n.x+dx,n.y+dy))queue.push({x:n.x+dx,y:n.y+dy,steps:n.steps+1});}}return cells;}
+export function monsterBombingCells(p,foes,range,motion=[]){
+ const targets=new Map(),observations=new Map(motion.map(e=>[e.slot,e]));
+ for(const foe of foes){
+  const x=Math.floor(foe.x/16),y=Math.floor(foe.y/16);targets.set(key(x,y),{x,y});
+  const observed=observations.get(foe.slot),vx=observed?.vx??0,vy=observed?.vy??0;
+  if(Math.max(Math.abs(vx),Math.abs(vy))<.05)continue;
+  // A pacing monster can reverse before the fuse expires. Intercept its
+  // observed straight corridor, stopping at terrain instead of cutting corners.
+  const dx=Math.abs(vx)>Math.abs(vy)?1:0,dy=dx?0:1,reach=Math.min(5,Math.ceil(Math.max(Math.abs(vx),Math.abs(vy))*150/16));
+  for(const sign of [-1,1])for(let i=1;i<=reach;i++){
+   const cx=x+dx*i*sign,cy=y+dy*i*sign;if(!walkable(p,cx,cy))break;targets.set(key(cx,cy),{x:cx,y:cy});
+  }
+ }
+ const cells=new Set();
+ for(const target of targets.values()){
+  if(tileKind(p,target.x,target.y)===10)cells.add(key(target.x,target.y));
+  for(const [dx,dy]of NEIGHBORS)for(let i=1;i<=Math.min(Math.max(range,1),15);i++){
+   const x=target.x+dx*i,y=target.y+dy*i,kind=tileKind(p,x,y);if([1,2,3,4,5,6].includes(kind))break;
+   if(kind===10)cells.add(key(x,y));
+  }
+ }
+ return cells;
+}
+function detonationTargets(p,foes,motion){
+ const observations=new Map(motion.map(e=>[e.slot,e])),cells=new Set();
+ for(const foe of foes){
+  const observed=observations.get(foe.slot),vx=observed?.vx??0,vy=observed?.vy??0;
+  if(Math.max(Math.abs(vx),Math.abs(vy))<.05){cells.add(key(Math.floor(foe.x/16),Math.floor(foe.y/16)));continue;}
+  const horizontal=Math.abs(vx)>Math.abs(vy),dx=horizontal?1:0,dy=horizontal?0:1,tx=Math.floor(foe.x/16),ty=Math.floor(foe.y/16);
+  let low=0,high=0;while(walkable(p,tx-dx*(low+1),ty-dy*(low+1)))low++;while(walkable(p,tx+dx*(high+1),ty+dy*(high+1)))high++;
+  const min=(horizontal?tx-low:ty-low)*16+8,max=(horizontal?tx+high:ty+high)*16+8;
+  let position=Math.max(min,Math.min(max,horizontal?foe.x:foe.y)),velocity=Math.sign(horizontal?vx:vy)*(horizontal?(observed.speedX??Math.abs(vx)):(observed.speedY??Math.abs(vy)));
+  // Normal fuses last 150 frames. Allow a short window for flame animation,
+  // velocity rounding and a monster bouncing at either corridor end.
+  for(let frame=1;frame<=170;frame++){
+   let next=position+velocity;if(next<min||next>max){velocity=-velocity;next=position+velocity;}position=Math.max(min,Math.min(max,next));
+   if(frame>=150)cells.add(key(Math.floor(horizontal?position/16:foe.x/16),Math.floor(horizontal?foe.y/16:position/16)));
+  }
+ }
+ return cells;
+}
 // Reconsider an interrupted step without cutting a corner through a block.
 function retreatRoute(p,bot,foes,danger,monsterDanger,predicted=foes){
  const start={x:Math.floor(bot.x/16),y:Math.floor(bot.y/16)},clearance=monsterClearance(foes,bot.x,bot.y),futureClearance=monsterClearance(predicted,bot.x,bot.y),unsafe=new Set([...danger,...monsterDanger]),blocked=monsterCells(p,foes,12);
@@ -119,7 +159,9 @@ export function spawnBomb(p,x,y,{slots=Array.from({length:10},(_,i)=>i),automati
  if(bombs(p).some(b=>b.x===x&&b.y===y))throw new Error('There is already a bomb on that tile.');
  const slot=slots.find(i=>p.RAM[0x84f+i]===0);
  if(slot===undefined)throw new Error('The original campaign bomb slots are full.');
- p.RAM[0x84f+slot]=automatic?0xc0:0x80;p.RAM[0x877+slot]=x;p.RAM[0x89f+slot]=y;
+ // Bit 6 means a directional enemy bomb as well as an automatic fuse. AI
+ // Bombermen use ordinary bombs; their timer hook is independent of the human.
+ p.RAM[0x84f+slot]=automatic&&slot<20?0xc0:0x80;p.RAM[0x877+slot]=x;p.RAM[0x89f+slot]=y;
  p.RAM[0x8c7+slot]=0;p.RAM[0x8ef+slot]=150;p.RAM[0x917+slot]=255;
  return slot;
 }
@@ -191,7 +233,16 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
  const originalSpriteLine=p.MakeSpriteLine;
  const cpu=p.CPURun;
  const get=p.Get;
- p.Get=function(address){if(address===0x284d&&this.PC===0x9112&&this.MPR[4]===9*8192&&this.RAM[0x84a]<8&&this.X>=20&&state.bombRanges[this.X])return state.bombRanges[this.X];return get.call(this,address);};
+ p.Get=function(address){
+  if(this.MPR[4]===9*8192&&this.RAM[0x84a]<8&&this.X>=20&&this.X<40){
+   if(address===0x284d&&this.PC===0x9112&&state.bombRanges[this.X])return state.bombRanges[this.X];
+   if(address===0x243a&&this.PC===0x90a0)return get.call(this,address)&~16;
+   // Old saves retain bit 6. Read those bombs as ordinary Bomberman blasts,
+   // including group allocation and propagation across fading flame centers.
+   if(address===0x284f+this.X&&[0x905a,0x9193,0x93d7].includes(this.PC))return get.call(this,address)&~64;
+  }
+  return get.call(this,address);
+ };
  // Campaign normally ticks ten human bomb slots; native drawing supports forty.
  p.CPURun=function(){const campaign=this.MPR[4]===9*8192&&this.RAM[0x84a]<8,extended=campaign&&this.PC===0x9080,skipEnemySlots=campaign&&this.PC===0x90aa&&this.X===20;const result=cpu.call(this);if(extended)this.X=39;else if(skipEnemySlots)this.X=9;return result;};
  function add(x,y) {
@@ -218,7 +269,7 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
   if((p.RAM[0x43a]&7)||p.RAM[0x437]){state.active=false;return;}
   state.active=true;
   state.steps++;
-  const danger=dangerCells(p),foes=enemies(p),predicted=foreseeMonsters(p,foes,state),monsterDanger=monsterCells(p,predicted),allDanger=new Set([...danger,...monsterDanger]),attackZone=attackCells(p,foes),nowBombs=bombs(p);
+  const danger=dangerCells(p),foes=enemies(p),predicted=foreseeMonsters(p,foes,state),monsterDanger=monsterCells(p,predicted),allDanger=new Set([...danger,...monsterDanger]),attackZones=new Map(),timedTargets=detonationTargets(p,foes,state.foeMotion),nowBombs=bombs(p);
   for(const bot of state.bots){
    if(!bot.alive&&bot.extraLives&&bot.deathFrame>=DEATH_FRAMES){const spot=findPath(p,{x:Math.floor(bot.x/16),y:Math.floor(bot.y/16)},n=>tileKind(p,n.x,n.y)===10&&!allDanger.has(key(n.x,n.y))&&!state.bots.some(b=>b.alive&&Math.floor(b.x/16)===n.x&&Math.floor(b.y/16)===n.y),{allowDanger:true,maxSteps:32});const cell=spot?.at(-1)??(spot?{x:Math.floor(bot.x/16),y:Math.floor(bot.y/16)}:null);if(cell){bot.x=cell.x*16+8;bot.y=cell.y*16+8;bot.extraLives--;bot.alive=true;bot.deathFrame=null;bot.target=null;bot.route=[];bot.fireproof=180;record(bot,'Used an extra life');}}
    if(!bot.alive)continue;
@@ -234,8 +285,9 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
    if(bot.remote)for(const [index,slot]of companionBombSlots(bot).entries())if(p.RAM[0x84f+slot]&128&&p.RAM[0x917+slot]===255&&p.RAM[0x8ef+slot]!==0){bot.remoteTimers[index]=Math.min(1000000,bot.remoteTimers[index]+1);const area=blastCells(p,p.RAM[0x877+slot],p.RAM[0x89f+slot],state.bombRanges[slot]||bot.fireRange),person=getHuman(),friends=[...state.bots.filter(b=>b.alive),...(person?[person]:[])];p.RAM[0x8ef+slot]=bot.remoteTimers[index]>=12&&friends.every(b=>!area.has(key(Math.floor(b.x/16),Math.floor(b.y/16))))&&!pickups(p).some(i=>area.has(key(i.x,i.y)))?1:150;}
    const pickupCells=new Set(available.map(i=>key(i.x,i.y))),pickupRoute=centered&&!allDanger.has(key(tx,ty))?findPath(p,start,n=>pickupCells.has(key(n.x,n.y)),{danger:allDanger,actor:bot}):null;
    if(pickupRoute?.length){bot.route=pickupRoute;bot.target=bot.route.shift();bot.action='Collecting power-ups';}
-   const blast=blastCells(p,tx,ty,bot.fireRange),enemyApproach=attackZone.has(key(tx,ty)),protectsPickup=pickups(p).some(i=>blast.has(key(i.x,i.y)));
-   const useful=NEIGHBORS.some(([dx,dy])=>[2,3,4].includes(tileKind(p,tx+dx,ty+dy)))||enemyApproach;
+   if(!attackZones.has(bot.fireRange))attackZones.set(bot.fireRange,monsterBombingCells(p,foes,bot.fireRange,state.foeMotion));
+   const attackZone=attackZones.get(bot.fireRange),blast=blastCells(p,tx,ty,bot.fireRange),enemyApproach=attackZone.has(key(tx,ty))&&(bot.remote||[...timedTargets].some(cell=>blast.has(cell))),protectsPickup=pickups(p).some(i=>blast.has(key(i.x,i.y)));
+   const clearing=NEIGHBORS.some(([dx,dy])=>[2,3,4].includes(tileKind(p,tx+dx,ty+dy))),useful=clearing||enemyApproach;
    if(centered&&!pickupRoute?.length&&!protectsPickup&&useful&&!bot.cooldown&&!danger.has(key(tx,ty))&&monsterClearance(foes,bot.x,bot.y)>=16&&!nowBombs.some(b=>b.x===tx&&b.y===ty)){
     const proposed=new Set([...allDanger,...blast]),escape=findPath(p,start,n=>!proposed.has(key(n.x,n.y)),{allowDanger:true,blocked:allDanger,maxSteps:Math.max(5,bot.fireRange+1),actor:bot}),person=getHuman();
     if(escape?.length&&(!person||!blast.has(key(Math.floor(person.x/16),Math.floor(person.y/16))))){
@@ -260,7 +312,11 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
    if(botWalkable(p,tx,ty,bot)&&(Math.abs(bot.x-(tx*16+8))>.01||Math.abs(bot.y-(ty*16+8))>.01)){bot.target={x:tx,y:ty};bot.route=[];continue;}
    bot.route=[];
    const exit=findPath(p,start,n=>tileKind(p,n.x,n.y)===8,{danger:allDanger,actor:bot});
-   if(foes.length===0&&p.RAM[0xd96]&&exit){if(exit.length)bot.target=exit[0];else {p.RAM[0x437]=1;record(bot,'Reached the exit; shared stage clear requested');}bot.action='Finding the exit';continue;}
+   if(foes.length===0&&p.RAM[0xd96]&&exit){if(exit.length)bot.target=exit[0];else {
+    if(p._spectator?.enabled){p.RAM[0x43d]=bot.x&255;p.RAM[0x43e]=bot.x>>8;p.RAM[0x43f]=bot.y&255;p.RAM[0x440]=bot.y>>8;}
+    p.RAM[0x437]=1;record(bot,'Reached the exit; shared stage clear requested');
+   }bot.action='Finding the exit';continue;}
+   if(attackZone.has(key(tx,ty))&&!enemyApproach&&!clearing){bot.action='Waiting for an intercept';continue;}
    
    const hunting=findPath(p,start,n=>(n.x!==tx||n.y!==ty)&&attackZone.has(key(n.x,n.y)),{danger:allDanger,actor:bot});
    const objective=hunting??findPath(p,start,n=>(n.x!==tx||n.y!==ty)&&NEIGHBORS.some(([dx,dy])=>[2,3,4].includes(tileKind(p,n.x+dx,n.y+dy))),{danger:allDanger,actor:bot});
@@ -311,7 +367,7 @@ export function validTile(t){return t&&Number.isInteger(t.x)&&t.x>=2&&t.x<=31&&N
 export function validateCompanionState(data){
  const integer=n=>Number.isSafeInteger(n)&&n>=0;
  if(!data||Object.keys(data).some(k=>!['bots','stage','nextID','steps','events','active','bombRanges','foeMotion'].includes(k))||!Array.isArray(data.bots)||data.bots.length>4||!integer(data.nextID)||!integer(data.steps)||typeof data.active!=='boolean'||(data.stage!==null&&!/^[0-7]:[0-7]$/.test(data.stage))||!Array.isArray(data.events)||data.events.length>40)throw new Error('Invalid teammate state in save.');
- if(data.foeMotion!==undefined&&(!Array.isArray(data.foeMotion)||data.foeMotion.length>32||new Set(data.foeMotion.map(e=>e?.slot)).size!==data.foeMotion.length||data.foeMotion.some(e=>!e||!integer(e.slot)||e.slot>31||!integer(e.type)||e.type>255||![e.x,e.y].every(n=>Number.isFinite(n)&&n>=0&&n<=65535)||![e.vx,e.vy].every(n=>Number.isFinite(n)&&Math.abs(n)<=2))))throw new Error('Invalid monster motion in save.');
+ if(data.foeMotion!==undefined&&(!Array.isArray(data.foeMotion)||data.foeMotion.length>32||new Set(data.foeMotion.map(e=>e?.slot)).size!==data.foeMotion.length||data.foeMotion.some(e=>!e||!integer(e.slot)||e.slot>31||!integer(e.type)||e.type>255||![e.x,e.y].every(n=>Number.isFinite(n)&&n>=0&&n<=65535)||![e.vx,e.vy].every(n=>Number.isFinite(n)&&Math.abs(n)<=2)||['speedX','speedY'].some(k=>e[k]!==undefined&&(!Number.isFinite(e[k])||e[k]<0||e[k]>2)))))throw new Error('Invalid monster motion in save.');
  if(data.bombRanges!==undefined&&(!Array.isArray(data.bombRanges)||data.bombRanges.length!==40||data.bombRanges.some(n=>!integer(n)||n>5)))throw new Error('Invalid saved bomb ranges.');
  for(const b of data.bots)if(!b||!Object.hasOwn(COLORS,b.color)||!integer(b.id)||!Number.isFinite(b.x)||!Number.isFinite(b.y)||b.x<32||b.x>520||b.y<16||b.y>520||typeof b.alive!=='boolean'||(b.target!==null&&!validTile(b.target))||!validRoute(b.route)||!integer(b.cooldown)||!integer(b.animation)||!integer(b.bombsPlaced)||!Number.isInteger(b.direction)||b.direction<0||b.direction>3||typeof b.action!=='string'||b.action.length>100)throw new Error('Invalid teammate state in save.');
  for(const b of data.bots)if(b.deathFrame!==undefined&&(b.alive?b.deathFrame!==null:!integer(b.deathFrame)||b.deathFrame>DEATH_FRAMES))throw new Error('Invalid teammate death animation in save.');

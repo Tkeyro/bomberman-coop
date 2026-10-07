@@ -29,7 +29,9 @@ export function validateState(pce,save) {
   for(const key of KEYS) validateShape(save.state[key],pce[key]);
   const s=save.state;
   if(!Number.isInteger(s.PC)||s.PC<0||s.PC>65535) throw new Error('Invalid CPU address in save.');
-  if(s.RAM.some(v=>!Number.isInteger(v)||v<0||v>255)||s.Palette.some(v=>!Number.isInteger(v)||v<0||v>511)) throw new Error('Invalid game memory in save.');
+  // The pinned core preserves both bytes of each VCE word. Native stage-card
+  // loads can set unused upper bits; retain them for exact transition replay.
+  if(s.RAM.some(v=>!Number.isInteger(v)||v<0||v>255)||s.Palette.some(v=>!Number.isInteger(v)||v<0||v>65535)) throw new Error('Invalid game memory in save.');
   if(![2,3,4].includes(s.VCEBaseClock)||![3,12].includes(s.CPUBaseClock)||s.TimerBaseClock!==3||s.PSGBaseClock!==6||s.TimerPrescaler<0||s.TimerPrescaler>=3072||s.PSGProgressClock<0||s.PSGProgressClock>=6||s.RAMMask!==8191||s.MPR.some(v=>!Number.isInteger(v)||v<0||v>0x1fe000||(v&8191)!==0)) throw new Error('Invalid hardware configuration in save.');
   if(!Number.isInteger(s.VDCPutLine)||s.VDCPutLine<0||s.VDCPutLine>=262||s.VDCPutLineProgressClock<0||s.VDCPutLineProgressClock>=1368) throw new Error('Invalid video timing in save.');
   for(const v of s.VDC) if(v.VDCProgressClock<0||v.VDCProgressClock>=1368||v.DrawLineWidth<1||v.DrawLineWidth>684||v.ScreenWidth<1||v.ScreenWidth>684||v.ScreenSize<1||v.ScreenSize>684||v.VRAM.some(w=>!Number.isInteger(w)||w<0||w>65535)||v.SPLine.some(dot=>!Number.isInteger(dot.data)||dot.data<0||dot.data>15||(dot.palette!==undefined&&(!Number.isInteger(dot.palette)||dot.palette<0||dot.palette>575)))) throw new Error('Invalid video configuration in save.');
