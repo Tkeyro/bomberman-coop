@@ -61,9 +61,17 @@ test('old overlapping teams separate without increasing overlap and optional coo
  for(let i=0;i<120&&previous;i++){crew.update();const area=overlap(crew.state.bots);assert.ok(area<=previous,'legacy separation never makes overlap worse');previous=area;}assert.equal(previous,0);separate(crew.state.bots);
  const bad=structuredClone(crew.state);bad.bots[0].yieldFrames=91;assert.throws(()=>validateCompanionState(bad),/cooperat|goal|yield|teammate/i);bad.bots[0].yieldFrames=0;bad.bots[0].goal={kind:'unknown',x:3,y:3};assert.throws(()=>validateCompanionState(bad),/cooperat|goal|teammate/i);
 });
-test('a teammate respects the human feet and chooses free space around an occupied destination',{skip:!rom},()=>{
- const human={x:88,y:88},{crew}=setup({human}),bot=crew.add(4,5);bot.target={x:5,y:5};bot.cooldown=1000;
- for(let i=0;i<80;i++){crew.update();separate([bot,human]);}assert.ok(bot.x!==72||bot.y!==88,'the bot yields to another free cell instead of pushing through the human');assert.notEqual(tile(bot),tile(human));
+test('a teammate passes a human blocking the only corridor and resumes separate work',{skip:!rom},()=>{
+ const human={x:88,y:88},{p,crew}=setup({human,solid:true});for(let x=2;x<=12;x++)p.RAM[0x44a+5*32+x]=0xca;
+ const bot=crew.add(4,5);spawnItem(p,1,12,5);bot.target={x:5,y:5};bot.goal={kind:'item',x:12,y:5};bot.cooldown=1000;let passed=false;
+ for(let i=0;i<300;i++){crew.update();if(overlap([bot,human])>0)passed=true;}
+ assert.ok(passed,'human occupancy is a path preference rather than a wall');assert.equal(bot.pickupsCollected,1,'the bot finishes work beyond the stationary human');separate([bot,human]);assert.ok(bot.x>human.x+16,'the bot does not remain piled on the human');
+});
+test('a bomber may escape into the human-occupied refuge while preserving human blast safety',{skip:!rom},()=>{
+ const human={x:40,y:40},{p,crew,step}=setup({human,solid:true});for(const [x,y]of [[2,1],[3,1],[2,2]])p.RAM[0x44a+y*32+x]=0xca;p.RAM[0x44a+1*32+4]=0xc2;
+ const bot=crew.add(3,1);bot.goal={kind:'block',x:4,y:1};let shared=false;
+ for(let i=0;i<250;i++){step();if(overlap([bot,human])>0)shared=true;}
+ assert.ok(shared,'the only safe refuge remains usable when a human stands there');assert.ok(bot.bombsPlaced>0,'human occupancy cannot veto a terrain-safe escape route');assert.equal(tileKind(p,4,1),10);assert.equal(bot.alive,true,'the shared shelter protects the bomber');assert.ok(![6,11,12].includes(tileKind(p,2,2)),'the refuge stays outside the placed bomb blast');
 });
 test('an off-center teammate can finish centering in its own reserved tile and both actors recover',{skip:!rom},()=>{
  const {p,crew}=setup({solid:true});for(let x=2;x<=12;x++)p.RAM[0x44a+5*32+x]=0xca;for(const y of [3,4])p.RAM[0x44a+y*32+7]=0xca;

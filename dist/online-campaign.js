@@ -4,7 +4,6 @@ import {isCampaign,canOccupy,tileKind,pickups,restoreFloor,enemies,companionBomb
 export const ONLINE_INPUT=Object.freeze({UP:1,RIGHT:2,DOWN:4,LEFT:8,BOMB:16,REMOTE:32});
 const MASK=63,key=(x,y)=>`${x},${y}`;
 const integer=(v,max)=>Number.isSafeInteger(v)&&v>=0&&v<=max;
-const overlap=(a,b)=>Math.max(0,10-Math.abs(a.x-b.x))*Math.max(0,10-Math.abs(a.y-b.y));
 function sound(p,id){
  const read=n=>p.Mapper.Read(4*8192+n),priority=n=>read(0xdc8+n),pointer=read(0xde8+id*2)|(read(0xde9+id*2)<<8),mask=read(pointer&8191)&63,pending=p.RAM[0x1487];
  if(!(pending&128)&&priority(id)<priority(pending))return;
@@ -32,6 +31,7 @@ export function validateOnlineCampaign(s){
 // is deliberately excluded from saved state and native CPU writes.
 export function createOnlineCampaign(p,{getActors=()=>[],getLocalID=()=>null}={}){
  const state={enabled:false,roster:[],frame:-1,inputs:[],previous:[],released:Array(40).fill(false)};
+ let localRendering=true;
  const sprites=p.MakeSpriteLine,background=p.MakeBGLine;
  p._onlineCampaign={state,control};
  function members(){const actors=getActors();return state.roster.map(r=>actors.find(a=>a.id===r.id)).filter(Boolean);}
@@ -82,7 +82,9 @@ export function createOnlineCampaign(p,{getActors=()=>[],getLocalID=()=>null}={}
   if(dx&&Math.abs(actor.x-centerX)>.01&&Math.sign(centerX-actor.x)===dx)amount=Math.min(amount,Math.abs(centerX-actor.x));
   if(dy&&Math.abs(actor.y-centerY)>.01&&Math.sign(centerY-actor.y)===dy)amount=Math.min(amount,Math.abs(centerY-actor.y));
   const next={x:actor.x+dx*amount,y:actor.y+dy*amount},leaving=tileKind(p,tx,ty)===0?{...actor,leaveBomb:key(tx,ty)}:actor;
-  const clear=(canOccupy(p,next.x,next.y,leaving)||blockedOverlap(p,actor,next)<blockedOverlap(p,actor,actor))&&members().filter(a=>a!==actor&&a.alive).every(a=>overlap(next,a)<=overlap(actor,a));
+  // Bombermen may share floor and pass through one another. Terrain and bombs
+  // still control movement, including stepping fully off a newly placed bomb.
+  const clear=canOccupy(p,next.x,next.y,leaving)||blockedOverlap(p,actor,next)<blockedOverlap(p,actor,actor);
   if((dx||dy)&&clear){actor.x=next.x;actor.y=next.y;actor.direction=direction;actor.animation=(actor.animation+1)%32;
    actor.target={x:Math.floor(actor.x/16),y:Math.floor(actor.y/16)};actor.action='Playing online';
    if(actor.animation%16===8)sound(p,p.RAM[0x84a]===2?0x12:1);
@@ -103,7 +105,7 @@ export function createOnlineCampaign(p,{getActors=()=>[],getLocalID=()=>null}={}
  // all RAM/SATB coordinates are restored before CPU execution continues.
  p.MakeSpriteLine=function(n){
   sprites.call(this,n);
-  if(n!==0||!state.enabled||!isCampaign(this))return;
+  if(n!==0||!state.enabled||!isCampaign(this)||!localRendering)return;
   const local=camera(focus()),canonicalX=this.RAM[0x25]|this.RAM[0x26]<<8,canonicalY=this.RAM[0x27]|this.RAM[0x28]<<8,dx=local.x-canonicalX,dy=local.y-canonicalY;
   if(!dx&&!dy)return;
   const v=this.VDC[0],status=v.VDCStatus,coords=this.RAM.slice(0x25,0x29),satb=[...v.SATB];
@@ -112,14 +114,18 @@ export function createOnlineCampaign(p,{getActors=()=>[],getLocalID=()=>null}={}
   try{sprites.call(this,n);}finally{for(let j=0;j<4;j++)this.RAM[0x25+j]=coords[j];for(let j=0;j<256;j++)v.SATB[j]=satb[j];v.VDCStatus=status;}
  };
  p.MakeBGLine=function(n){
-  if(n!==0||!state.enabled||!isCampaign(this))return background.call(this,n);
+  if(n!==0||!state.enabled||!isCampaign(this)||!localRendering)return background.call(this,n);
   const v=this.VDC[0],line=v.DrawBGYLine-(v.VDS+v.VSW);if(line<32)return background.call(this,n);
   const local=camera(focus()),dx=local.x-(this.RAM[0x25]|this.RAM[0x26]<<8),dy=local.y-(this.RAM[0x27]|this.RAM[0x28]<<8),bx=v.VDCRegister[7],by=v.DrawBGLine,coords=this.RAM.slice(0x25,0x29);
   v.VDCRegister[7]=bx+dx;v.DrawBGLine=(by+dy)&v.VScreenHeightMask;
   this.RAM[0x25]=local.x&255;this.RAM[0x26]=local.x>>8;this.RAM[0x27]=local.y&255;this.RAM[0x28]=local.y>>8;
   try{return background.call(this,n);}finally{v.VDCRegister[7]=bx;v.DrawBGLine=by;for(let j=0;j<4;j++)this.RAM[0x25+j]=coords[j];}
  };
- return {state,control,setInputs,update,focus,canonical,configure(enabled,roster=[]){
+ // Catch-up frames still run the canonical compositor and its native collision
+ // flags. Only the extra local-camera pass is optional; this presentation flag
+ // is deliberately absent from saved gameplay state and checksums.
+ return {state,control,setInputs,update,focus,canonical,setLocalRendering(enabled){localRendering=Boolean(enabled);},configure(enabled,roster=[]){
+  localRendering=true;
   const next={enabled,roster:structuredClone(roster),frame:-1,inputs:roster.map(()=>0),previous:roster.map(()=>0),released:Array(40).fill(false)};validateOnlineCampaign(next);Object.assign(state,next);update();
- },restore(s){validateOnlineCampaign(s);Object.assign(state,structuredClone(s));update();},reset(){Object.assign(state,{enabled:false,roster:[],frame:-1,inputs:[],previous:[],released:Array(40).fill(false)});}};
+ },restore(s){validateOnlineCampaign(s);localRendering=true;Object.assign(state,structuredClone(s));update();},reset(){localRendering=true;Object.assign(state,{enabled:false,roster:[],frame:-1,inputs:[],previous:[],released:Array(40).fill(false)});}};
 }

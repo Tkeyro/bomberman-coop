@@ -132,6 +132,22 @@ test('host readiness waits for all room members rather than one connected guest'
  const f=fixture(t),{host}=await f.pair(),third=f.member('third-player-0001');await third.client.join('ABC123',{name:'Third',color:'red'});await host.client.poll();assert.equal(host.client.connected(),false);
  const before=f.calls.length;await assert.rejects(host.client.start(),/every player.*connect/i);assert.equal(f.calls.length,before,'incomplete rooms cannot request a start');await f.settle();assert.equal(host.client.connected(),true);assert.equal(third.client.connected(),true);await host.client.start();
 });
+test('connection diagnostics use selected candidate pairs and report the slowest live host connection',async t=>{
+ const f=fixture(t),{host,guest}=await f.pair(),third=f.member('third-player-0001');await third.client.join('ABC123',{name:'Third',color:'red'});await f.settle();
+ const offerPeers=[...f.network.peers.values()].filter(p=>p.localDescription.type==='offer'),answerPeers=[...f.network.peers.values()].filter(p=>p.localDescription.type==='answer');
+ const stats=seconds=>new Map([['transport',{type:'transport',selectedCandidatePairId:'selected'}],['selected',{type:'candidate-pair',currentRoundTripTime:seconds}],['unused',{type:'candidate-pair',nominated:true,currentRoundTripTime:9}]]);
+ offerPeers.forEach((peer,index)=>{peer.getStats=async()=>stats(index?0.091:0.028);});answerPeers.forEach(peer=>{peer.getStats=async()=>stats(0.033);});
+ const calls=f.calls.length,packets=f.network.channels.reduce((n,c)=>n+c.sent.length,0),timers=f.members.map(m=>m.time.pending.size);
+ assert.deepEqual(await host.client.connectionStats(),{rttMs:91,sampledPeers:2,connectedPeers:2});assert.deepEqual(await guest.client.connectionStats(),{rttMs:33,sampledPeers:1,connectedPeers:1});
+ assert.equal(f.calls.length,calls,'diagnostics do not call the lobby service');assert.equal(f.network.channels.reduce((n,c)=>n+c.sent.length,0),packets,'diagnostics do not send peer messages');assert.deepEqual(f.members.map(m=>m.time.pending.size),timers,'diagnostics do not schedule timers');
+ await third.client.leave();await host.client.poll();assert.deepEqual(await host.client.connectionStats(),{rttMs:28,sampledPeers:1,connectedPeers:1});
+});
+test('connection diagnostics tolerate unsupported, rejected, invalid and stale browser stats',async t=>{
+ const f=fixture(t),{host,guest}=await f.pair(),peer=[...f.network.peers.values()].find(p=>p.localDescription.type==='offer');
+ assert.deepEqual(await host.client.connectionStats(),{rttMs:null,sampledPeers:0,connectedPeers:1});peer.getStats=async()=>{throw new Error('Stats unavailable.');};assert.equal((await host.client.connectionStats()).rttMs,null);
+ for(const seconds of [undefined,-1,NaN,Infinity,'0.04']){peer.getStats=async()=>new Map([['transport',{type:'transport',selectedCandidatePairId:'pair'}],['pair',{type:'candidate-pair',currentRoundTripTime:seconds}]]);assert.equal((await host.client.connectionStats()).rttMs,null);}
+ const hold=deferred();peer.getStats=()=>hold.promise;const pending=host.client.connectionStats();await guest.client.leave();await host.client.poll();hold.resolve(new Map([['transport',{type:'transport',selectedCandidatePairId:'pair'}],['pair',{type:'candidate-pair',currentRoundTripTime:0.04}]]));assert.deepEqual(await pending,{rttMs:null,sampledPeers:0,connectedPeers:0});assert.equal(host.events.errors.length,0);
+});
 test('signal provenance rejects strangers and guest offers while the same player can leave and rejoin',async t=>{
  const f=fixture(t),{host,guest}=await f.pair(),third=f.member('third-player-0001');await third.client.join('ABC123',{name:'Third',color:'red'});await f.settle();
  const peers=f.network.peers.size;f.service.inject('unknown-player-01',guest.id,'offer',{type:'offer',sdp:'invalid-peer'});f.service.inject(third.id,guest.id,'offer',{type:'offer',sdp:'invalid-peer'});await guest.client.poll();assert.equal(f.network.peers.size,peers);assert.equal(guest.events.errors.length,0);

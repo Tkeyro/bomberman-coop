@@ -8,7 +8,7 @@ import {createLobbyHandler} from '../../server/lobby.js';
 const root=new URL('../../',import.meta.url),html=fs.readFileSync(new URL('dist/index.html',root),'utf8');
 const bytes=fs.readFileSync(process.env.BOMBERMAN_TEST_ROM),flush=()=>new Promise(resolve=>setImmediate(resolve));
 const scenario=process.env.BOMBERMAN_ONLINE_APP_SCENARIO??'';
-assert.ok(['','audio-hang','pause-delay','ack-timeout','guest-lag','player-departure'].includes(scenario),'known online app scenario');
+assert.ok(['','audio-hang','pause-delay','ack-timeout','guest-lag','player-departure','online-gameover'].includes(scenario),'known online app scenario');
 const same=(a,b)=>assert.deepEqual(JSON.parse(JSON.stringify(a)),JSON.parse(JSON.stringify(b)));
 function colorButton(app,color,group='room-color-options'){
  const buttons=app.e.get(group).children;assert.equal(buttons.length,8,`${group} offers all eight colors`);
@@ -48,9 +48,9 @@ class Peer{
  close(){this.connectionState='closed';this.channel?.close();}
 }
 async function app(name,id,color,gameMode='campaign',players=2){
- const elements=new Map(),timers=new Map(),modules=new Map();let timerID=0,nextFrame,clock=1000,machine,exported;
+ const elements=new Map(),timers=new Map(),modules=new Map();let timerID=0,nextFrame,clock=1000,machine,exported,draws=0;
  const document={getElementById:id=>elements.get(id),activeElement:null,hidden:false,addEventListener(){},createElement:element};
- function element(){return {value:'',textContent:'',disabled:true,hidden:false,open:false,listeners:{},children:[],style:{},attributes:{},dataset:{},width:684,height:262,addEventListener(type,fn){this.listeners[type]=fn;},setAttribute(key,value){this.attributes[key]=value;},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];this.textContent='';},focus(){document.activeElement=this;},click(){return this.listeners.click?.();},showModal(){this.open=true;},close(){this.open=false;},getContext(){return {createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),putImageData(){}};}};}
+ function element(){return {value:'',textContent:'',disabled:true,hidden:false,open:false,listeners:{},children:[],style:{},attributes:{},dataset:{},width:684,height:262,addEventListener(type,fn){this.listeners[type]=fn;},setAttribute(key,value){this.attributes[key]=value;},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];this.textContent='';},focus(){document.activeElement=this;},click(){return this.listeners.click?.();},showModal(){this.open=true;},close(){this.open=false;},getContext(){return {createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),putImageData(){draws++;}};}};}
  for(const [,id]of html.matchAll(/id="([^"]+)"/g))elements.set(id,element());
  elements.get('color-select').value=color;elements.get('player-count-select').value='2';elements.get('room-name').value=name;
  const window={listeners:{},addEventListener(type,fn){this.listeners[type]=fn;}};
@@ -69,7 +69,7 @@ async function app(name,id,color,gameMode='campaign',players=2){
  async function load(path){const result=await module(new URL(path,root));if(result.status==='unlinked')await result.link((specifier,parent)=>module(new URL(specifier,parent.identifier)));if(result.status==='linked')await result.evaluate();return result.namespace;}
  const vendor=await load('dist/vendor/pce.js'),setCanvas=vendor.PCE.prototype.SetCanvas;vendor.PCE.prototype.SetCanvas=function(id){machine=this;return setCanvas.call(this,id);};
  await load('dist/app.js');
- const result={name,id,e:elements,window,load,timers,context,get machine(){return machine;},get exported(){return exported;},
+ const result={name,id,e:elements,window,load,timers,context,get machine(){return machine;},get exported(){return exported;},get draws(){return draws;},
   async key(code,up=false){window.listeners[up?'keyup':'keydown']({code,preventDefault(){}});await flush();},
   tick(){clock+=50;nextFrame(clock);},
   costRuns(ms){const original=machine.Run;machine.Run=function(...args){const result=original.apply(this,args);clock+=ms;return result;};return ()=>{machine.Run=original;};},
@@ -129,6 +129,86 @@ if(scenario==='player-departure'){
  for(const a of [host,guest]){assert.equal(a.e.get('pause-btn').textContent,'Resume','remaining peers cannot resume without the original roster');assert.match(a.status(),/A player disconnected/);assert.doesNotMatch(a.e.get('menu-status').textContent,/Waiting for the host|catch up/);}
  await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
  process.stdout.write(JSON.stringify({scenario,blockedResume:true,remainingPlayers:2,fatalReason:true}));
+}else if(scenario==='online-gameover'){
+ const {DEATH_FRAMES}=await host.load('dist/campaign.js'),actors=new Map(),events=new Map();
+ // Capture the actual extension actors passed to their normal controls. The
+ // fixture may defeat them directly without exposing private app variables.
+ for(const a of [host,guest]){
+  const found=new Map(),control=a.machine._onlineCampaign.control;
+  a.machine._onlineCampaign.control=function(actor){found.set(actor.id,actor);return control(actor);};
+  actors.set(a,found);
+ }
+ await advance(1);
+ for(const a of [host,guest]){
+  assert.equal(actors.get(a).size,2);a.machine.RAM[0x438]=0;
+  a.machine.RAM.fill(0,0xd98,0xdb8);a.machine.RAM.fill(0,0x84f,0x877);a.machine.RAM.fill(0,0xf9b,0xfb4);
+  a.machine._levelObjective.state.enabled=false;a.machine.RAM[0x434]=31;a.machine.RAM[0x435]=21;
+  for(let y=1;y<21;y++)for(let x=2;x<31;x++)a.machine.RAM[0x44a+y*32+x]=0xca;
+  const event={music:[],banners:0,black:0,inventedLife:false,terminal:null},cpu=a.machine.CPURun,run=a.machine.Run;events.set(a,event);
+  a.machine.CPURun=function(){
+   if(this.PC===0xea57)event.music.push(this.A);
+   if(this.MPR[4]===9*8192&&this.PC===0x802a)event.banners++;
+   return cpu.call(this);
+  };
+  a.machine.Run=function(...args){
+   const result=run.apply(this,args);
+   if(this.Palette.every(value=>(value&0x1ff)===0))event.black++;
+   if(this.RAM[0x438]>0&&this.RAM[0x438]!==255)event.inventedLife=true;
+   if(this._spectator.enabled&&this._spectator.finished&&!this._spectator.transition&&this.VDC[0].SATB[2]===918&&!event.terminal){
+    event.terminal={ram:[...this.RAM],pc:this.PC,registers:[this.A,this.X,this.Y,this.S,this.P,this.ProgressClock],mpr:[...this.MPR],vdc:this.VDC.map(v=>v.VDCStatus)};
+   }
+   return result;
+  };
+  const dead=actors.get(a).get(1);Object.assign(dead,{alive:false,deathFrame:0,extraLives:0,target:null,route:[],goal:null});
+ }
+ // The first defeated player cannot end an otherwise living team, even when
+ // the shared native stock is already zero.
+ const before=actors.get(host).get(2).x;await guest.key('ArrowRight');await advance(40);await guest.key('ArrowRight',true);await advance(2);
+ assert.ok(actors.get(host).get(2).x>before+20,'the surviving guest remains playable');
+ for(const a of [host,guest]){
+  assert.equal(a.machine._spectator.transition,null,'one survivor does not start native defeat');assert.equal(a.machine.RAM[0x438],0);
+  assert.equal(actors.get(a).get(1).deathFrame,DEATH_FRAMES);assert.equal(actors.get(a).get(2).alive,true);
+  assert.equal(events.get(a).terminal,null);assert.equal(events.get(a).music.includes(0x2a),false);
+  Object.assign(actors.get(a).get(2),{alive:false,deathFrame:0,extraLives:0,target:null,route:[],goal:null});
+ }
+ let elapsed=0,pausedEndingRecovery=false;
+ for(;elapsed<300&&![host,guest].every(a=>a.e.get('start-btn').textContent==='Select');elapsed++){
+  host.tick();await flush();
+  if(events.get(host).terminal&&!events.get(guest).terminal&&!pausedEndingRecovery){
+   // Pause after the host has stopped at the native ending, while its final
+   // authority frames are still queued at the guest. Resume must release just
+   // that unfinished guest to drain the ending and complete the handshake.
+   assert.equal(guest.e.get('pause-btn').textContent,'Pause');await guest.e.get('pause-btn').click();await flush();
+   assert.equal(guest.e.get('pause-btn').textContent,'Resume');const pausedFrame=guest.machine._onlineCampaign.state.frame;
+   guest.tick();await flush();assert.equal(guest.machine._onlineCampaign.state.frame,pausedFrame,'a paused guest retains its queued ending frames');
+   assert.equal(events.get(guest).terminal,null,'the guest has not reached the ending before Resume');
+   await guest.e.get('pause-btn').click();await flush();assert.equal(guest.e.get('pause-btn').textContent,'Pause','Resume can finish an ending whose host has already stopped');
+   assert.ok(channels.some(c=>c.sent.some(s=>{const p=JSON.parse(s);return p.type==='play'&&p.to===guest.id;})),'the host resumes only the unfinished guest');
+   pausedEndingRecovery=true;
+  }
+  guest.tick();await flush();assert.doesNotMatch(host.status()+guest.status(),/Emulation stopped|states differ|frame order|desynchronization|disconnected/);
+ }
+ assert.equal(pausedEndingRecovery,true,'the guest paused and resumed across the terminal authority frame');
+ assert.ok(elapsed>=40&&elapsed<300,'both apps wait for native death music and fade before returning to their menus');
+ for(const a of [host,guest]){
+  const event=events.get(a);assert.equal(event.inventedLife,false,'game over cannot manufacture a spare life');
+  assert.ok(event.terminal,'the unchanged ROM reached its native title');assert.equal(event.terminal.ram[0x438],255);
+  assert.ok(event.music.includes(0x2a),'native death music plays');assert.ok(event.music.includes(0x2b),'native title music follows');assert.ok(event.black>0,'the native fade reaches black');
+  assert.equal(event.banners,0,'zero lives cannot restart with a stage card');
+  for(const actor of actors.get(a).values()){assert.equal(actor.alive,false);assert.equal(actor.deathFrame,DEATH_FRAMES);assert.equal(actor.extraLives,0);}
+  assert.equal(a.machine._onlineCampaign.state.enabled,false);assert.equal(a.e.get('online-room-dialog').open,false);assert.equal(a.e.get('start-btn').disabled,false);
+  assert.match(a.e.get('menu-status').textContent,/1P - CAMPAIGN/);assert.match(a.status(),/Game over/);
+ }
+ same(events.get(host).terminal,events.get(guest).terminal);
+ assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='game-over-ready')),'guests acknowledge the terminal authority frame before room closure');
+ assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='game-over')),'host releases all peers to the main menu together');
+ for(const a of [host,guest]){await a.key('ArrowDown');assert.match(a.e.get('menu-status').textContent,/1P - DLC/);}
+ await advance(35);for(const a of [host,guest]){
+  assert.equal(a.machine._onlineCampaign.state.enabled,false,'later title frames never resume the defeated team');
+  assert.equal(a.e.get('room-leave').disabled,true,'the completed lobby is closed');
+  assert.equal(a.e.get('create-room').disabled,false,'either player can create a fresh lobby after game over');
+ }
+ db.sqlite.close();process.stdout.write(JSON.stringify({scenario,survivorContinues:true,finiteLives:true,nativeSequence:true,synchronizedEnd:true,usableMenus:true,pausedEndingRecovery}));
 }else if(scenario==='guest-lag'){
  // Stall the guest's rendering/simulation while its reliable transport stays
  // connected. The host must bound its lead rather than fill a ten-second queue.
@@ -139,6 +219,14 @@ if(scenario==='player-departure'){
  assert.ok(host.machine._onlineCampaign.state.frame-before<=18,'the host waits rather than running away from its guest');
  assert.equal(host.e.get('pause-btn').textContent,'Pause','lag does not become a fatal pause');
  assert.match(host.e.get('menu-status').textContent,/catch up/,'the host explains its temporary wait');
+ // A catch-up callback may simulate several authority frames, but redundant
+ // pictures must not all reach the canvas. The next ordinary frame must still
+ // draw, ensuring the presentation suppression cannot leak out of catch-up.
+ const backlogFrame=guest.machine._onlineCampaign.state.frame,draws=guest.draws;
+ guest.tick();await flush();
+ const caught=guest.machine._onlineCampaign.state.frame-backlogFrame;
+ assert.ok(caught>1,'a queued guest simulates multiple frames in one callback');
+ assert.ok(guest.draws-draws<caught,'catch-up omits intermediate canvas uploads');
  // Restore service at half the host's callback cadence. Catch-up consumes
  // queued authority frames without dropping or predicting simulation frames.
  for(let n=0;n<100;n++){host.tick();await flush();if(n%2===0){guest.tick();await flush();}assert.doesNotMatch(host.status()+guest.status(),/Emulation stopped|states differ|frame order|desynchronization|too far behind/);assert.ok(host.machine._onlineCampaign.state.frame-guest.machine._onlineCampaign.state.frame<=18);}
@@ -151,10 +239,11 @@ if(scenario==='player-departure'){
  for(let n=0;n<5;n++){const before=guest.machine._onlineCampaign.state.frame;guest.tick();await flush();assert.equal(guest.machine._onlineCampaign.state.frame-before,1,'a 20ms emulation step exhausts the catch-up time budget');}
  restoreCost();for(let n=0;n<20&&host.machine._onlineCampaign.state.frame!==guest.machine._onlineCampaign.state.frame;n++){guest.tick();await flush();}
  same(host.machine.RAM,guest.machine.RAM);assert.equal(host.machine.PC,guest.machine.PC);
+ const normalDraws=guest.draws;host.tick();await flush();guest.tick();await flush();assert.ok(guest.draws>normalDraws,'the next ordinary frame draws after catch-up');
  assert.ok(host.machine._onlineCampaign.state.frame>=120,'checksummed gameplay continues after the lag');
  assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='progress')),'guest reports processed frame progress');
  await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
- process.stdout.write(JSON.stringify({scenario,frames:host.machine._onlineCampaign.state.frame,maxLead:lead,catchUp:true,timeBudget:true}));
+ process.stdout.write(JSON.stringify({scenario,frames:host.machine._onlineCampaign.state.frame,maxLead:lead,catchUp:true,timeBudget:true,coalescedRendering:true}));
 }else if(scenario){
  let delayedFrames=0;
  if(scenario==='pause-delay'){

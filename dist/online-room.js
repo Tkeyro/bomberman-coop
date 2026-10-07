@@ -1,5 +1,5 @@
 import {COLORS,ROM_SHA256} from './session.js';
-export const ONLINE_REVISION='0.4.4';
+export const ONLINE_REVISION='0.4.6';
 const MAX_TRANSFER=16*1024*1024,CHUNK=8192;
 export function stablePlayerID(storage=globalThis.localStorage){
  let id;try{id=storage?.getItem('bomberman-player-id');}catch{}
@@ -109,7 +109,22 @@ export function createOnlineRoom({playerId=stablePlayerID(),fetch:request=global
  }
  function recipients(){return room?isHost()?room.players.filter(p=>p.id!==playerId).map(p=>p.id):[room.hostId]:[];}
  function writable(){return connected()&&recipients().every(id=>peers.get(id)?.channel?.bufferedAmount<=65536);}
- return {get room(){return room;},get playerId(){return playerId;},get host(){return isHost();},connected,writable,
+ async function connectionStats(){
+  const current=generation,live=recipients().map(id=>({id,peer:peers.get(id)})).filter(({peer})=>peer?.channel?.readyState==='open');
+  const readings=await Promise.all(live.map(async({id,peer})=>{
+   try{
+    if(typeof peer.pc.getStats!=='function')return null;const stats=await peer.pc.getStats();
+    if(closed||current!==generation||peers.get(id)!==peer||peer.channel?.readyState!=='open'||!stats?.values||!stats?.get)return null;
+    let rtt=null;for(const report of stats.values())if(report.type==='transport'&&report.selectedCandidatePairId){
+     const pair=stats.get(report.selectedCandidatePairId),seconds=pair?.currentRoundTripTime;
+     if(pair?.type==='candidate-pair'&&Number.isFinite(seconds)&&seconds>=0)rtt=Math.max(rtt??0,seconds*1000);
+    }return rtt;
+   }catch{return null;}
+  }));
+  if(closed||current!==generation)return {rttMs:null,sampledPeers:0,connectedPeers:0};
+  const samples=readings.filter(Number.isFinite);return {rttMs:samples.length?Math.max(...samples):null,sampledPeers:samples.length,connectedPeers:live.filter(({id,peer})=>peers.get(id)===peer&&peer.channel?.readyState==='open').length};
+ }
+ return {get room(){return room;},get playerId(){return playerId;},get host(){return isHost();},connected,writable,connectionStats,
   create:info=>enter('',info),join:(code,info)=>enter('/'+String(code).trim().toUpperCase()+'/join',info),leave,poll,
   async update(info){if(info.color&&!Object.hasOwn(COLORS,info.color))throw new Error('Choose a valid Bomberman color.');const current=generation,data=await api('/'+room.code+'/member','PATCH',info);if(!closed&&current===generation){room=data.room;announce();}},
   async checkpoint(value){const current=generation,data=await api('/'+room.code+'/checkpoint','PUT',{checkpoint:value});if(!closed&&current===generation){room=data.room;announce();}},

@@ -10,8 +10,9 @@ export function createSpectator(p,{getBots=()=>[],onRetry=()=>{},finiteLives=()=
  const inArena=()=>isCampaign(p)&&p._newCampaign?.transition?.phase!=='loading'&&state.transition?.phase!=='loading';
  function beginRetry(){
   state.finished=false;state.transition={phase:'dying',stage:stageID(p)};
-  // Solo AI uses the original finite stock of spare lives. Cooperative watch
-  // sessions keep their existing same-level retry policy.
+  // Finite solo/online campaigns spend the original stock of spare rounds.
+  // Collected actor revivals are handled first by retry(). AI watch sessions
+  // may opt into their existing unlimited same-level retry policy.
   if(!finiteLives())p.RAM[0x438]=Math.max(1,p.RAM[0x438]);
   p.RAM[0x43a]|=1;p.RAM[0x43c]=0;
  }
@@ -52,7 +53,7 @@ export function createSpectator(p,{getBots=()=>[],onRetry=()=>{},finiteLives=()=
  };
  function update(){
   if(!state.enabled||!inArena())return;
-  // Keep the unused native controller outside the arena. Only AI actors play.
+  // Keep the unused native controller outside the arena. Extension actors play.
   // Also adopt an independently triggered native defeat (for example timeout).
   if(!p._newCampaign?.enabled&&!state.transition&&(p.RAM[0x43a]&1))beginRetry();
   if(!state.transition&&!p._newCampaign?.transition&&!p.RAM[0x437]&&!(p.RAM[0x43a]&7))p.RAM[0x43d]=p.RAM[0x43e]=p.RAM[0x43f]=p.RAM[0x440]=0;

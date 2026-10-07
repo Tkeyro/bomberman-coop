@@ -320,16 +320,15 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
  const feet=(a,b)=>Math.max(0,10-Math.abs(a.x-b.x))*Math.max(0,10-Math.abs(a.y-b.y));
  function friends(bot){const human=getHuman();return [...state.bots.filter(b=>b.alive&&b!==bot),...(human?[human]:[])];}
  function actorCells(actor){const cells=new Set();for(let y=Math.floor((actor.y-4.99)/16);y<=Math.floor((actor.y+4.99)/16);y++)for(let x=Math.floor((actor.x-4.99)/16);x<=Math.floor((actor.x+4.99)/16);x++)cells.add(key(x,y));return cells;}
- function traffic(bot,includeTargets=true,peers=true){const cells=new Set(),human=getHuman();for(const actor of peers?friends(bot):human?[human]:[]){for(const cell of actorCells(actor))cells.add(cell);if(includeTargets&&actor.target)cells.add(key(actor.target.x,actor.target.y));}return cells;}
- // Peers are a route preference, not terrain. A one-tile corridor must remain
- // usable for passing and for escaping a planned bomb together.
- function teamPath(bot,start,goal,options={}){const blocked=new Set([...options.blocked??[],...traffic(bot)]),route=findPath(p,start,goal,{...options,actor:bot,blocked});if(route)return route;return findPath(p,start,goal,{...options,actor:bot,blocked:new Set([...options.blocked??[],...traffic(bot,true,false)])});}
+ function traffic(bot,includeTargets=true){const cells=new Set();for(const actor of friends(bot)){for(const cell of actorCells(actor))cells.add(cell);if(includeTargets&&actor.target)cells.add(key(actor.target.x,actor.target.y));}return cells;}
+ // Every teammate, human or AI, is a route preference rather than terrain.
+ // Narrow corridors and the only safe shelter remain usable through bodies.
+ function teamPath(bot,start,goal,options={}){const blocked=new Set([...options.blocked??[],...traffic(bot)]),route=findPath(p,start,goal,{...options,actor:bot,blocked});if(route)return route;return findPath(p,start,goal,{...options,actor:bot});}
  function teamBlastClear(bot,area){return friends(bot).every(friend=>!area.has(key(Math.floor(friend.x/16),Math.floor(friend.y/16)))&&(!friend.target||!area.has(key(friend.target.x,friend.target.y))));}
- function teamStep(bot,x,y){const human=getHuman();if(!human)return true;const before=feet(bot,human),after=feet({x,y},human);return after===0||after<before-.00001;}
  function yieldRoute(bot,unsafe,avoid=new Set()){
   const start={x:Math.floor(bot.x/16),y:Math.floor(bot.y/16)},cx=start.x*16+8,cy=start.y*16+8;
   // Finish a retreat along the same axis before turning at a tile center.
-  if(Math.abs(bot.x-cx)>.01||Math.abs(bot.y-cy)>.01){if(!unsafe.has(key(start.x,start.y))&&canStep(p,bot.x,bot.y,cx,cy,bot)&&teamStep(bot,cx,cy))return [start];return [];}
+  if(Math.abs(bot.x-cx)>.01||Math.abs(bot.y-cy)>.01){if(!unsafe.has(key(start.x,start.y))&&canStep(p,bot.x,bot.y,cx,cy,bot))return [start];return [];}
   const escaping=unsafe.has(key(start.x,start.y))||avoid.has(key(start.x,start.y)),hazards=new Set(),occupied=traffic(bot);if(!unsafe.has(key(start.x,start.y)))for(const cell of unsafe)hazards.add(cell);if(escaping)for(let y=1;y<(p.RAM[0x435]||12);y++)for(let x=2;x<(p.RAM[0x434]||15);x++)if([6,11,12].includes(tileKind(p,x,y)))hazards.add(key(x,y));
   // A teammate may cross the unplaced blast or another teammate to reach
   // shelter. Keep unrelated bomb/monster danger blocked when starting safe.
@@ -413,20 +412,15 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
     }
    }
    if(danger.has(key(tx,ty))||monsterClearance(predicted,bot.x,bot.y)<32||(bot.target&&monsterDanger.has(key(bot.target.x,bot.target.y)))){
-    bot.route=retreatRoute(p,bot,foes,danger,monsterDanger,predicted,traffic(bot,true,false));bot.target=bot.route.shift()??null;bot.action=danger.has(key(tx,ty))?'Escaping':'Avoiding monsters';
+    bot.route=retreatRoute(p,bot,foes,danger,monsterDanger,predicted);bot.target=bot.route.shift()??null;bot.action=danger.has(key(tx,ty))?'Escaping':'Avoiding monsters';
     if(!bot.target)continue;
    }
    if(bot.target){
     const dx=bot.target.x*16+8-bot.x,dy=bot.target.y*16+8-bot.y;
     if(!botWalkable(p,bot.target.x,bot.target.y,bot)){bot.target=null;bot.route=[];release(bot);continue;}
-    if(traffic(bot,true,false).has(key(bot.target.x,bot.target.y))&&!(bot.target.x===tx&&bot.target.y===ty)){
-     const route=yieldRoute(bot,allDanger,new Set([key(bot.target.x,bot.target.y)]));if(route.length){release(bot);bot.route=route;bot.target=bot.route.shift();bot.yieldFrames=45;bot.action='Yielding to a teammate';}else bot.action='Waiting for a teammate';
-     continue;
-    }
     // Native Roller Shoes change 3 pixels per 4 frames to 1 per frame.
     const speed=bot.speedUp?1:.75,move=Math.min(speed,Math.abs(dx||dy)),nextX=bot.x+(dx?Math.sign(dx)*move:0),nextY=bot.y+(!dx&&dy?Math.sign(dy)*move:0);
     if(!canStep(p,bot.x,bot.y,nextX,nextY,bot)){bot.target=null;bot.route=[];release(bot);bot.action='Blocked';continue;}
-    if(!teamStep(bot,nextX,nextY)){const route=yieldRoute(bot,allDanger);if(route.length){release(bot);bot.route=route;bot.target=bot.route.shift();bot.yieldFrames=45;bot.action='Yielding to a teammate';}else bot.action='Waiting for a teammate';continue;}
     bot.x=nextX;bot.y=nextY;if(dx)bot.direction=dx>0?1:3;else if(dy)bot.direction=dy>0?2:0;
     if(move>0){bot.animation=(bot.animation+1)%32;if(bot.animation%16===8)requestSound(p,p.RAM[0x84a]===2?0x12:1);}
     if(Math.abs(dx)+Math.abs(dy)<=speed){bot.x=bot.target.x*16+8;bot.y=bot.target.y*16+8;bot.target=null;}
