@@ -169,7 +169,7 @@ export function createOnlineRoom({playerId=stablePlayerID(),fetch:request=global
   }
   return result;
  }
- return {get room(){return room;},get playerId(){return playerId;},get host(){return isHost();},connected,writable,connectionStats,
+ return {get room(){return room;},get playerId(){return playerId;},get host(){return isHost();},get sessionGeneration(){return generation;},connected,writable,connectionStats,
   create:info=>enter('',info),join:(code,info)=>enter('/'+String(code).trim().toUpperCase()+'/join',info),leave,poll,
   async update(info){if(info.color&&!Object.hasOwn(COLORS,info.color))throw new Error('Choose a valid Bomberman color.');const current=generation,data=await api('/'+room.code+'/member','PATCH',info);if(!closed&&current===generation){room=data.room;announce();}},
   async checkpoint(value){const current=generation,data=await api('/'+room.code+'/checkpoint','PUT',{checkpoint:value});if(!closed&&current===generation){room=data.room;announce();}},

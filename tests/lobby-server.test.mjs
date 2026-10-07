@@ -64,6 +64,27 @@ function fixture(t) {
   return { db, api, create, joinRoom, advance: ms => { timestamp += ms; } };
 }
 
+// Hold one production write after its reads/authentication, then let another
+// request close and recreate the same key before that old write continues.
+function delayNextWrite(db, pattern) {
+  const prepare = db.prepare.bind(db), batch = db.batch.bind(db);
+  let signalStarted, resume, used = false;
+  const started = new Promise(resolve => { signalStarted = resolve; });
+  const gate = new Promise(resolve => { resume = resolve; });
+  const pause = async sql => {
+    if (used || !sql.some(value => pattern.test(value))) return;
+    used = true;
+    signalStarted();
+    await gate;
+  };
+  db.prepare = sql => ({ bind(...values) {
+    const bound = prepare(sql).bind(...values);
+    return { ...bound, async run() { await pause([sql]); return bound.run(); } };
+  } });
+  db.batch = async statements => { await pause(statements.map(statement => statement.sql)); return batch(statements); };
+  return { started, resume, restore() { db.prepare = prepare; db.batch = batch; } };
+}
+
 test('lobby membership uses unguessable tokens; roster exposes no secrets', async t => {
   const f = fixture(t), host = await f.create(), guest = await f.joinRoom(host, 1, { color: 'black' });
   assert.match(host.token, /^[a-f0-9]{64}$/);
@@ -85,6 +106,140 @@ test('lobby membership uses unguessable tokens; roster exposes no secrets', asyn
   assert.equal((await f.api(`/${host.room.code}/start`, 'POST', undefined, guest.token)).status, 403);
   const other = await f.create({ playerId: identity(9).playerId });
   assert.equal((await f.api(`/${other.room.code}`, 'GET', undefined, host.token)).status, 403);
+});
+
+test('custom room keys are trimmed, uppercase and usable through lowercase routes', async t => {
+  const f = fixture(t);
+  for (const [input, expected] of [['  a01  ', 'A01'], ['myRoom', 'MYROOM'], ['abcdefghijkl', 'ABCDEFGHIJKL']]) {
+    const host = await f.create({ code: input, transport: 'stream', world: 3, color: 'orange' });
+    assert.equal(host.room.code, expected);
+    assert.equal(host.room.transport, 'stream');
+    assert.equal(host.room.world, 3);
+    const guest = await f.api(`/${expected.toLowerCase()}/join`, 'POST', identity(1, { color: 'black' }));
+    assert.equal(guest.status, 201, JSON.stringify(guest.body));
+    assert.equal(guest.body.room.code, expected);
+    const read = await f.api(`/${expected.toLowerCase()}`, 'GET', undefined, guest.body.token);
+    assert.equal(read.status, 200);
+    assert.deepEqual(read.body.room.players.map(player => player.color), ['orange', 'black']);
+    assert.equal(read.body.room.hostId, host.playerId);
+    assert.equal((await f.api(`/${expected.toLowerCase()}/member`, 'PATCH', { ready: true }, guest.body.token)).status, 200);
+  }
+});
+
+test('blank room keys keep random allocation and invalid keys never create records', async t => {
+  const f = fixture(t);
+  const automatic = await Promise.all([f.create(), f.create({ code: '' }), f.create({ code: ' \t ' })]);
+  for (const host of automatic) assert.match(host.room.code, /^[A-Z2-9]{10}$/);
+  assert.equal(new Set(automatic.map(host => host.room.code)).size, automatic.length);
+  for (const code of ['a', 'ab', 'abcdefghijklm', 'my room', 'my-room', 'my_room', 'ab\nc', 'abſ', 'éab', 'ＡＢＣ', null, 12, false, [], {}]) {
+    const result = await f.api('', 'POST', { ...identity(0), mode: 'campaign', code });
+    assert.equal(result.status, 400, JSON.stringify({ code, result }));
+    assert.equal(result.body.error, 'Use a room key with 3–12 letters or numbers.');
+  }
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS count FROM bm_rooms').get().count, automatic.length);
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS count FROM bm_members').get().count, automatic.length);
+});
+
+test('simultaneous custom-key creation has one winner and no orphan membership', async t => {
+  const f = fixture(t);
+  const created = await Promise.all([
+    f.api('', 'POST', { ...identity(0), mode: 'campaign', code: '  friends01 ', transport: 'stream', world: 2 }),
+    f.api('', 'POST', { ...identity(1), mode: 'battle', code: 'FRIENDS01', transport: 'sync', world: 4 }),
+  ]);
+  assert.deepEqual(created.map(result => result.status).sort(), [201, 409]);
+  const winner = created.find(result => result.status === 201).body;
+  const conflict = created.find(result => result.status === 409);
+  assert.deepEqual(conflict.body, { error: 'That room key is already in use. Choose another key.' });
+  assert.equal(winner.room.code, 'FRIENDS01');
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS count FROM bm_rooms').get().count, 1);
+  assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS count FROM bm_members').get().count, 1);
+  const read = await f.api('/friends01', 'GET', undefined, winner.token);
+  assert.equal(read.status, 200);
+  assert.equal(read.body.room.hostId, winner.playerId);
+  assert.deepEqual(read.body.room.players.map(player => player.id), [winner.playerId]);
+});
+
+test('a used custom key preserves the active room, its roster and signaling', async t => {
+  const f = fixture(t), host = await f.create({ code: 'taylor', transport: 'stream', color: 'orange', world: 2 });
+  const guest = await f.joinRoom(host, 1, { color: 'black' });
+  await f.api('/TAYLOR/member', 'PATCH', { ready: true }, guest.token);
+  await f.api('/TAYLOR/signals', 'POST', { to: guest.playerId, type: 'ice', data: null }, host.token);
+  await f.api('/TAYLOR/start', 'POST', undefined, host.token);
+  const snapshot = table => f.db.sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
+  const before = ['bm_rooms', 'bm_members', 'bm_signals'].map(snapshot);
+  const collision = await f.api('', 'POST', { ...identity(9), mode: 'battle', transport: 'sync', code: 'Taylor', color: 'red', world: 7 });
+  assert.equal(collision.status, 409);
+  assert.deepEqual(['bm_rooms', 'bm_members', 'bm_signals'].map(snapshot), before);
+  const read = await f.api('/taylor', 'GET', undefined, guest.token);
+  assert.equal(read.status, 200);
+  assert.equal(read.body.room.status, 'playing');
+  assert.equal(read.body.room.transport, 'stream');
+  assert.equal(read.body.signals.length, 1);
+});
+
+test('closed and cleanup-expired custom keys can be reused without old memberships', async t => {
+  const f = fixture(t);
+  for (const end of ['close', 'expire']) {
+    const host = await f.create({ code: end });
+    const guest = await f.joinRoom(host, 1);
+    await f.api(`/${host.room.code}/signals`, 'POST', { to: guest.playerId, type: 'ice', data: null }, host.token);
+    if (end === 'close') assert.equal((await f.api(`/${host.room.code}/leave`, 'POST', undefined, host.token)).status, 200);
+    else {
+      f.advance(30 * 60_000 + 1);
+      assert.equal((await f.api(`/${host.room.code}`, 'GET', undefined, host.token)).status, 404);
+    }
+    const replacement = await f.create({ code: end.toUpperCase(), playerId: identity(9).playerId, color: 'yellow' });
+    assert.equal(replacement.room.code, host.room.code);
+    assert.notEqual(replacement.token, host.token);
+    assert.deepEqual(replacement.room.players.map(player => player.id), [identity(9).playerId]);
+    assert.equal((await f.api(`/${replacement.room.code}`, 'GET', undefined, host.token)).status, 403);
+    assert.equal((await f.api(`/${replacement.room.code}`, 'GET', undefined, guest.token)).status, 403);
+    assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS count FROM bm_signals WHERE room_code = ?').get(replacement.room.code).count, 0);
+    assert.equal(f.db.sqlite.prepare('SELECT COUNT(*) AS count FROM bm_members WHERE room_code = ?').get(replacement.room.code).count, 1);
+  }
+});
+
+test('delayed requests for a closed room cannot mutate a replacement using the same key', async t => {
+  const cases = [
+    ['host leave', /^DELETE FROM bm_rooms WHERE code =/, f => f.api('/REUSE/leave', 'POST', undefined, f.host.token), 200],
+    ['host heartbeat', /^UPDATE bm_rooms SET expires_at/, f => f.api('/REUSE/heartbeat', 'POST', undefined, f.host.token), 410],
+    ['host poll expiry refresh', /^UPDATE bm_rooms SET expires_at/, f => { f.advance(16_000); return f.api('/REUSE', 'GET', undefined, f.host.token); }, 410],
+    ['host start', /^UPDATE bm_rooms SET status = 'playing'/, f => f.api('/REUSE/start', 'POST', undefined, f.host.token), 409],
+    ['host checkpoint', /^UPDATE bm_rooms SET checkpoint_json/, f => f.api('/REUSE/checkpoint', 'PUT', { checkpoint: { world: 2, area: 3, players: [identity(0), identity(1)].map(player => ({ id: player.playerId, name: player.name, color: player.color })), revision } }, f.host.token), 409],
+    ['host signaling', /^INSERT INTO bm_signals/, f => f.api('/REUSE/signals', 'POST', { to: f.guest.playerId, type: 'ice', data: null }, f.host.token), 410],
+    ['guest member update', /^UPDATE bm_members SET name =/, f => f.api('/REUSE/member', 'PATCH', { color: 'red' }, f.guest.token), 409],
+    ['guest leave', /^DELETE FROM bm_signals WHERE room_code = \? AND \(from_player_id/, f => f.api('/REUSE/leave', 'POST', undefined, f.guest.token), 200],
+    ['guest join', /^INSERT INTO bm_members.*SELECT \?,\?,\?,\?,\?,0,/, f => f.api('/REUSE/join', 'POST', identity(2)), 409],
+  ];
+  for (const [label, pattern, request, expectedStatus] of cases) await t.test(label, async sub => {
+    const f = fixture(sub);
+    f.host = await f.create({ code: 'reuse' });
+    f.guest = await f.joinRoom(f.host, 1);
+    await f.api('/REUSE/member', 'PATCH', { ready: true }, f.guest.token);
+    const delayed = delayNextWrite(f.db, pattern);
+    const pending = request(f);
+    try {
+      await delayed.started;
+      f.advance(1_000);
+      assert.equal((await f.api('/REUSE/leave', 'POST', undefined, f.host.token)).status, 200);
+      const replacement = await f.create({ code: 'REUSE', playerId: identity(9).playerId, color: 'yellow' });
+      const guest = await f.joinRoom(replacement, 1);
+      await f.api('/REUSE/member', 'PATCH', { ready: true }, guest.token);
+      await f.api('/REUSE/signals', 'POST', { to: guest.playerId, type: 'ice', data: null }, replacement.token);
+      // Match the old generation, so host identity is the only barrier against
+      // a delayed start/checkpoint accepting the replacement's fresh roster.
+      assert.equal(f.db.sqlite.prepare('SELECT generation FROM bm_rooms WHERE code = ?').get('REUSE').generation, 2);
+      const snapshot = () => ['bm_rooms', 'bm_members', 'bm_signals'].map(table => f.db.sqlite.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all());
+      const before = snapshot();
+      delayed.resume();
+      const result = await pending;
+      assert.equal(result.status, expectedStatus, JSON.stringify(result.body));
+      assert.deepEqual(snapshot(), before);
+    } finally {
+      delayed.resume();
+      delayed.restore();
+    }
+  });
 });
 
 test('room transport is fixed by the host and exposed consistently for campaign and battle', async t => {

@@ -106,9 +106,23 @@ async function app(name,id,color,gameMode='campaign',players=2,{rom=true}={}){
  return result;
 }
 const host=await app('Tkeyro','host-player-00001','black','campaign',scenario==='player-departure'?3:2),guest=await app('Guest','guest-player-0001','orange','campaign',2,{rom:scenario!=='host-stream'});let third;
-if(scenario==='host-stream'){host.e.get('room-transport').value='stream';await host.e.get('room-transport').listeners.change?.({target:{value:'stream'}});}
+if(scenario==='host-stream'){
+ host.e.get('room-transport').value='stream';await host.e.get('room-transport').listeners.change?.({target:{value:'stream'}});
+ const key=host.e.get('room-create-code');key.value='bad key';const before=requests.filter(request=>request.path==='/api/rooms'&&request.method==='POST').length;
+ await host.e.get('create-room').click();assert.match(host.status(),/letters.*numbers/i,'an invalid key shows a useful format error');assert.equal(key.value,'bad key','a rejected key remains available for correction');assert.equal(key.disabled,false);assert.equal(host.e.get('game-canvas').captures.length,0,'invalid keys are rejected before creating media');assert.equal(requests.filter(request=>request.path==='/api/rooms'&&request.method==='POST').length,before,'invalid keys are rejected before sending creation');
+ key.value=' tayLor7 ';
+}
 async function negotiate(){for(let i=0;i<12;i++){await host.poll();await guest.poll();if(third)await third.poll();if(!host.e.get('room-start').disabled)return;}assert.fail(host.status()+' / '+guest.status());}
-async function join(){await host.e.get('create-room').click();const code=host.e.get('room-code').value;assert.match(code,/^[A-Z2-9]{10}$/);guest.e.get('room-code').value=code;await guest.e.get('join-room').click();await guest.e.get('room-ready').click();await negotiate();assert.equal(host.e.get('room-list').children.length,2);assert.equal(guest.e.get('room-list').children.length,2);assert.match(host.e.get('room-list').children[1].children[0].title,/orange/);return code;}
+async function join(){
+ await host.e.get('create-room').click();const code=host.e.get('room-code').value;
+ if(scenario==='host-stream'){
+  assert.equal(code,'TAYLOR7','the server confirms a canonical custom key');
+  const created=requests.filter(request=>request.path==='/api/rooms'&&request.method==='POST').at(-1);assert.ok(created);assert.equal(JSON.parse(created.body).code,'tayLor7','creation forwards the requested key after trimming outer spaces');
+  assert.equal(host.e.get('room-create-code').disabled,true,'the creation key is fixed while in a room');
+  await host.e.get('room-copy').click();assert.match(host.e.get('room-status').textContent,/Invite link: https:\/\/game\.test\/\?room=TAYLOR7/,'invite links use the confirmed custom key');
+ }else {assert.match(code,/^[A-Z2-9]{10}$/);const created=requests.filter(request=>request.path==='/api/rooms'&&request.method==='POST').at(-1);assert.equal(Object.hasOwn(JSON.parse(created.body),'code'),false,'blank custom key preserves random creation');}
+ guest.e.get('room-code').value=scenario==='host-stream'?' taylor7 ':code;await guest.e.get('join-room').click();assert.equal(guest.e.get('room-code').value,code,'joining accepts a typed key without case-sensitive matching');await guest.e.get('room-ready').click();await negotiate();assert.equal(host.e.get('room-list').children.length,2);assert.equal(guest.e.get('room-list').children.length,2);assert.match(host.e.get('room-list').children[1].children[0].title,/orange/);return code;
+}
 async function synchronize(){await host.e.get('room-start').click();for(let n=0;n<700;n++){host.tick();await flush();if(host.e.get('pause-btn').textContent==='Resume')await new Promise(resolve=>setTimeout(resolve,5));if(guest.e.get('online-room-dialog').open===false&&guest.e.get('pause-btn').textContent==='Pause')return;}assert.fail(host.status()+' / '+guest.status()+JSON.stringify({frame:host.e.get('frame-count').textContent,campaign:host.machine._onlineCampaign.state,stage:host.machine.RAM.slice(0x84a,0x84c),packets:channels.map(c=>c.sent.slice(-3).map(s=>JSON.parse(s).type))}));}
 async function advance(count){for(let i=0;i<count;i++){host.tick();await flush();guest.tick();await flush();if(third){third.tick();await flush();}assert.doesNotMatch(host.status()+guest.status(),/Emulation stopped|out of sync|frame order|different roster/);}}
 await join();
@@ -191,7 +205,8 @@ if(scenario==='host-stream'){
  await defeatStreamTeam();await host.key('ArrowDown');await host.key('Enter');await flush();for(let n=0;n<130&&host.e.get('start-btn').disabled;n++)await advance(1);
  assert.equal(host.e.get('start-btn').disabled,false);assert.match(host.e.get('menu-status').textContent,/1P - CAMPAIGN/);assert.equal(video.srcObject,null);assert.equal(video.hidden,true);assert.ok(channels.every(c=>c.readyState==='closed'));
  assert.equal(guest.machine,undefined);assert.equal(guest.e.get('join-online-btn').disabled,false);await guest.e.get('join-online-btn').click();assert.equal(guest.e.get('online-room-dialog').open,true,'a guest without a ROM can join another room after Quit');
- db.sqlite.close();process.stdout.write(JSON.stringify({scenario,noGuestEmulator:true,videoAudio:true,remoteControls:true,noSimulationBackpressure:true,worldContinue:true,cleanQuit:true,streamPreferences:true,streamDiagnostics:true,pauseResume:true}));
+ assert.equal(host.e.get('room-create-code').disabled,false,'the host may choose a key for the next room after Quit');
+ db.sqlite.close();process.stdout.write(JSON.stringify({scenario,noGuestEmulator:true,videoAudio:true,remoteControls:true,noSimulationBackpressure:true,worldContinue:true,cleanQuit:true,streamPreferences:true,streamDiagnostics:true,pauseResume:true,customRoomKey:true}));
 }else if(scenario==='player-departure'){
  // Losing a third player must invalidate the original three-person game even
  // if the two remaining peers are still connected and the server removes them.

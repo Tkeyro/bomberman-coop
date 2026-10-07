@@ -2,6 +2,8 @@
 
 Browser extension for **Bomberman (1990), TurboGrafx-16, USA**. Public source: [Tkeyro/bomberman-coop](https://github.com/Tkeyro/bomberman-coop). Each player supplies the same verified game file locally.
 
+**v0.4.9 adds optional custom room codes.** Before creating a lobby, enter an easy code such as `TAYLOR7` in **Create with this code (optional)**. Use 3–12 ASCII letters or digits; outer spaces are trimmed and letter case does not matter. The room displays its uppercase code. Leaving the field blank retains random codes. If a live room already uses the code, creation reports a conflict; choose another code. A host can reuse a code after their old room closes or expires through normal cleanup. Existing online protocol and save compatibility remain unchanged.
+
 **v0.4.8 tunes host-stream playback and adds latency diagnostics.** Streamed audio and video request the browser's smallest allowed playback buffer; game video prefers motion and frame rate while keeping the existing 2.5Mbps ceiling. A second audio/video track callback reuses the attached stream instead of restarting playback. Guest status reports recent video/audio buffer averages and decoding cost; host status reports encoding cost and limitations when the browser supplies them. These are separate measurements, not total input-to-display delay, and a zero buffer preference does not guarantee zero actual buffering. Controls retain their reliable channel. This patch keeps the v0.4.7 online protocol and save compatibility.
 
 **v0.4.7 adds optional host streaming and an in-game Continue / Quit screen for online campaigns.** Choose **Host stream — shared camera** when creating a room. Only the host loads and runs the game; guests join without a ROM and receive the host's game video/audio while controlling their own Bomberman. Separate-camera synchronized emulators remain available. After the team's final defeat, the original death music and fade finish before the host chooses Continue or Quit. Continue keeps the room, players and colors, restarts the current world at its beginning (3-6 → 3-0; 1-3 → 1-0), and resets lives and upgrades for a fresh attempt. Quit closes the room and returns players with a loaded ROM to the main menu; guests without a ROM can join another room.
@@ -55,7 +57,7 @@ After collecting **Remote Control**, your bombs wait for **B/X**. Native solo bo
 
 ## Online rooms
 
-Choose Campaign → ONLINE or Battle → ONLINE to host, or use **Join online room** to enter a friend's room without loading a game file. Enter your name and color, create a lobby and copy its invitation link, or enter a room code and join. The roster shows each person's name, color and readiness. The host starts after at least two players are ready and their peer connections are established; rooms support up to five players. Everyone needs the same current app build.
+Choose Campaign → ONLINE or Battle → ONLINE to host, or use **Join online room** to enter a friend's room without loading a game file. Enter your name and color, optionally choose your own code in **Create with this code (optional)**, then create a lobby and copy its invitation link. To join, enter your friend's code in **Room code**; letter case does not matter. The roster shows each person's name, color and readiness. The host starts after at least two players are ready and their peer connections are established; rooms support up to five players. Everyone needs the same current app build.
 
 | Room transport | Emulator and camera | Game file and saves |
 | --- | --- | --- |

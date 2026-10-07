@@ -218,7 +218,7 @@ test('stream diagnostics share an in-flight browser read and report recent buffe
 test('signal provenance rejects strangers and guest offers while the same player can leave and rejoin',async t=>{
  const f=fixture(t),{host,guest}=await f.pair(),third=f.member('third-player-0001');await third.client.join('ABC123',{name:'Third',color:'red'});await f.settle();
  const peers=f.network.peers.size;f.service.inject('unknown-player-01',guest.id,'offer',{type:'offer',sdp:'invalid-peer'});f.service.inject(third.id,guest.id,'offer',{type:'offer',sdp:'invalid-peer'});await guest.client.poll();assert.equal(f.network.peers.size,peers);assert.equal(guest.events.errors.length,0);
- await guest.client.leave();await host.client.poll();const callCount=f.calls.length;await guest.client.join('abc123',{name:'Returned',color:'yellow'});await f.settle();
+ const priorSession=guest.client.sessionGeneration;await guest.client.leave();await host.client.poll();const callCount=f.calls.length;await guest.client.join('abc123',{name:'Returned',color:'yellow'});await f.settle();assert.ok(guest.client.sessionGeneration>priorSession,'a reused code has a new local session identity');
  assert.equal(guest.client.playerId,guest.id);assert.equal(host.client.room.players.filter(p=>p.id===guest.id).length,1);assert.equal(guest.client.connected(),true);assert.equal(host.client.connected(),true);
  const returning=f.calls.slice(callCount).find(c=>c.url.endsWith('/join'));assert.equal(returning.body.playerId,guest.id);assert.equal(returning.headers.Authorization,undefined);const firstPoll=f.calls.slice(callCount).find(c=>c.method==='GET'&&c.headers.Authorization===`Bearer token-${guest.id}`);assert.equal(new URL(firstPoll.url,'https://test.invalid').searchParams.get('after'),'0');
 });
