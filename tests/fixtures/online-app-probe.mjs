@@ -8,7 +8,7 @@ import {createLobbyHandler} from '../../server/lobby.js';
 const root=new URL('../../',import.meta.url),html=fs.readFileSync(new URL('dist/index.html',root),'utf8');
 const bytes=fs.readFileSync(process.env.BOMBERMAN_TEST_ROM),flush=()=>new Promise(resolve=>setImmediate(resolve));
 const scenario=process.env.BOMBERMAN_ONLINE_APP_SCENARIO??'';
-assert.ok(['','audio-hang','pause-delay','ack-timeout'].includes(scenario),'known online app scenario');
+assert.ok(['','audio-hang','pause-delay','ack-timeout','guest-lag','player-departure'].includes(scenario),'known online app scenario');
 const same=(a,b)=>assert.deepEqual(JSON.parse(JSON.stringify(a)),JSON.parse(JSON.stringify(b)));
 function colorButton(app,color,group='room-color-options'){
  const buttons=app.e.get(group).children;assert.equal(buttons.length,8,`${group} offers all eight colors`);
@@ -47,7 +47,7 @@ class Peer{
  connect(){const other=peers.get(this.remoteDescription?.sdp);if(!other||!this.localDescription||!other.localDescription||!this.candidates.length||!other.candidates.length)return;const host=this.channel?this:other,guest=host===this?other:this;if(host.channel.remote)return;const channel=new Channel(host.channel.label);host.channel.remote=channel;channel.remote=host.channel;guest.channel=channel;guest.ondatachannel?.({channel});for(const p of [host,guest])p.connectionState='connected';for(const c of [host.channel,channel]){c.readyState='open';queueMicrotask(()=>c.onopen?.());}}
  close(){this.connectionState='closed';this.channel?.close();}
 }
-async function app(name,id,color,gameMode='campaign'){
+async function app(name,id,color,gameMode='campaign',players=2){
  const elements=new Map(),timers=new Map(),modules=new Map();let timerID=0,nextFrame,clock=1000,machine,exported;
  const document={getElementById:id=>elements.get(id),activeElement:null,hidden:false,addEventListener(){},createElement:element};
  function element(){return {value:'',textContent:'',disabled:true,hidden:false,open:false,listeners:{},children:[],style:{},attributes:{},dataset:{},width:684,height:262,addEventListener(type,fn){this.listeners[type]=fn;},setAttribute(key,value){this.attributes[key]=value;},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];this.textContent='';},focus(){document.activeElement=this;},click(){return this.listeners.click?.();},showModal(){this.open=true;},close(){this.open=false;},getContext(){return {createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),putImageData(){}};}};}
@@ -72,6 +72,7 @@ async function app(name,id,color,gameMode='campaign'){
  const result={name,id,e:elements,window,load,timers,context,get machine(){return machine;},get exported(){return exported;},
   async key(code,up=false){window.listeners[up?'keyup':'keydown']({code,preventDefault(){}});await flush();},
   tick(){clock+=50;nextFrame(clock);},
+  costRuns(ms){const original=machine.Run;machine.Run=function(...args){const result=original.apply(this,args);clock+=ms;return result;};return ()=>{machine.Run=original;};},
   async poll(){const pending=[...timers].filter(([,t])=>t.ms===1000);for(const [id,t]of pending){timers.delete(id);await t.fn();}await flush();},
   async export(){await elements.get('export-save-btn').click();assert.match(elements.get('save-status').textContent,/exported/);return (await load('dist/save-state.js')).decodeSave(exported);},
  status(){return [elements.get('load-status').textContent,elements.get('room-status').textContent,elements.get('save-status').textContent].join(' | ');}
@@ -83,15 +84,16 @@ async function app(name,id,color,gameMode='campaign'){
  await elements.get('rom-input').listeners.change({target:{files:[{size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)}]}});assert.match(elements.get('load-status').textContent,/verified/,result.status());
  assertColorUI(result,color);
  for(let i=0;i<110;i++)result.tick();
- await result.key('ArrowDown');await result.key('ArrowDown');if(gameMode==='battle')await result.key('ArrowDown');await result.key('Enter');await result.key('ArrowDown');await result.key('Enter');assert.equal(elements.get('online-room-dialog').open,true,result.status());
+ await result.key('ArrowDown');await result.key('ArrowDown');if(gameMode==='battle')await result.key('ArrowDown');if(players!==2){elements.get('player-count-select').value=String(players);elements.get('player-count-select').listeners.change({target:{value:String(players)}});}await result.key('Enter');await result.key('ArrowDown');await result.key('Enter');assert.equal(elements.get('online-room-dialog').open,true,result.status());
  return result;
 }
-const host=await app('Tkeyro','host-player-00001','black'),guest=await app('Guest','guest-player-0001','orange');
-async function negotiate(){for(let i=0;i<12;i++){await host.poll();await guest.poll();if(!host.e.get('room-start').disabled)return;}assert.fail(host.status()+' / '+guest.status());}
+const host=await app('Tkeyro','host-player-00001','black','campaign',scenario==='player-departure'?3:2),guest=await app('Guest','guest-player-0001','orange');let third;
+async function negotiate(){for(let i=0;i<12;i++){await host.poll();await guest.poll();if(third)await third.poll();if(!host.e.get('room-start').disabled)return;}assert.fail(host.status()+' / '+guest.status());}
 async function join(){await host.e.get('create-room').click();const code=host.e.get('room-code').value;assert.match(code,/^[A-Z2-9]{10}$/);guest.e.get('room-code').value=code;await guest.e.get('join-room').click();await guest.e.get('room-ready').click();await negotiate();assert.equal(host.e.get('room-list').children.length,2);assert.equal(guest.e.get('room-list').children.length,2);assert.match(host.e.get('room-list').children[1].children[0].title,/orange/);return code;}
 async function synchronize(){await host.e.get('room-start').click();for(let n=0;n<700;n++){host.tick();await flush();if(host.e.get('pause-btn').textContent==='Resume')await new Promise(resolve=>setTimeout(resolve,5));if(guest.e.get('online-room-dialog').open===false&&guest.e.get('pause-btn').textContent==='Pause')return;}assert.fail(host.status()+' / '+guest.status()+JSON.stringify({frame:host.e.get('frame-count').textContent,campaign:host.machine._onlineCampaign.state,stage:host.machine.RAM.slice(0x84a,0x84c),packets:channels.map(c=>c.sent.slice(-3).map(s=>JSON.parse(s).type))}));}
-async function advance(count){for(let i=0;i<count;i++){host.tick();await flush();guest.tick();await flush();assert.doesNotMatch(host.status()+guest.status(),/Emulation stopped|out of sync|frame order|different roster/);}}
+async function advance(count){for(let i=0;i<count;i++){host.tick();await flush();guest.tick();await flush();if(third){third.tick();await flush();}assert.doesNotMatch(host.status()+guest.status(),/Emulation stopped|out of sync|frame order|different roster/);}}
 await join();
+if(scenario==='player-departure'){third=await app('Third','third-player-0001','blue');third.e.get('room-code').value=host.e.get('room-code').value;await third.e.get('join-room').click();await third.e.get('room-ready').click();await negotiate();assert.equal(host.e.get('room-list').children.length,3);}
 // The picker is inside the modal. Changing a ready player's color updates the
 // confirmed roster, clears readiness and keeps both UI groups synchronized.
 const changingColor=colorButton(guest,'yellow').click();assertColorUI(guest,'orange',{disabled:true});
@@ -108,13 +110,52 @@ if(scenario==='ack-timeout'){
  await host.e.get('pause-btn').click();await guest.e.get('pause-btn').click();await flush();
  for(let n=0;n<3;n++){host.tick();guest.tick();await flush();}
  assert.deepEqual([host,guest].map(a=>a.e.get('frame-count').textContent),frames,'Resume cannot run a game whose startup handshake failed');
- assert.match(host.status(),/synchronization did not complete/);assert.match(guest.status(),/synchronization did not complete/);
+ assert.match(host.status(),/Online startup timed out/);assert.match(guest.status(),/Online startup timed out/);
  assert.equal(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='frames')),false,'no authority frames are emitted before everyone has loaded');
  await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
  process.stdout.write(JSON.stringify({scenario,startupTimeout:true,blockedResume:true,droppedLoaded}));
 }else{
 await synchronize();await advance(5);assertColorUI(host,'black',{disabled:true});assertColorUI(guest,'orange',{disabled:true});
-if(scenario){
+if(scenario==='player-departure'){
+ // Losing a third player must invalidate the original three-person game even
+ // if the two remaining peers are still connected and the server removes them.
+ await third.e.get('room-leave').click();await flush();await host.poll();await guest.poll();
+ assert.equal(host.e.get('room-list').children.length,2,'the disconnected member is removed from the lobby record');
+ for(const a of [host,guest]){assert.equal(a.e.get('pause-btn').textContent,'Resume');assert.match(a.status(),/A player disconnected/);}
+ const before=[host,guest].map(a=>a.machine._onlineCampaign.state.frame);
+ await host.e.get('pause-btn').click();await guest.e.get('pause-btn').click();await flush();
+ for(let n=0;n<5;n++){host.tick();guest.tick();await flush();}
+ assert.deepEqual([host,guest].map(a=>a.machine._onlineCampaign.state.frame),before);
+ for(const a of [host,guest]){assert.equal(a.e.get('pause-btn').textContent,'Resume','remaining peers cannot resume without the original roster');assert.match(a.status(),/A player disconnected/);assert.doesNotMatch(a.e.get('menu-status').textContent,/Waiting for the host|catch up/);}
+ await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
+ process.stdout.write(JSON.stringify({scenario,blockedResume:true,remainingPlayers:2,fatalReason:true}));
+}else if(scenario==='guest-lag'){
+ // Stall the guest's rendering/simulation while its reliable transport stays
+ // connected. The host must bound its lead rather than fill a ten-second queue.
+ const before=host.machine._onlineCampaign.state.frame;
+ for(let n=0;n<250;n++){host.tick();await flush();}
+ const lead=host.machine._onlineCampaign.state.frame-guest.machine._onlineCampaign.state.frame;
+ assert.ok(lead<=18,'a stalled guest leaves at most 18 authoritative frames outstanding, got '+lead);
+ assert.ok(host.machine._onlineCampaign.state.frame-before<=18,'the host waits rather than running away from its guest');
+ assert.equal(host.e.get('pause-btn').textContent,'Pause','lag does not become a fatal pause');
+ assert.match(host.e.get('menu-status').textContent,/catch up/,'the host explains its temporary wait');
+ // Restore service at half the host's callback cadence. Catch-up consumes
+ // queued authority frames without dropping or predicting simulation frames.
+ for(let n=0;n<100;n++){host.tick();await flush();if(n%2===0){guest.tick();await flush();}assert.doesNotMatch(host.status()+guest.status(),/Emulation stopped|states differ|frame order|desynchronization|too far behind/);assert.ok(host.machine._onlineCampaign.state.frame-guest.machine._onlineCampaign.state.frame<=18);}
+ for(let n=0;n<20&&host.machine._onlineCampaign.state.frame!==guest.machine._onlineCampaign.state.frame;n++){guest.tick();await flush();}
+ same(host.machine.RAM,guest.machine.RAM);assert.equal(host.machine.PC,guest.machine.PC);
+ // A slow emulated frame must yield back to the UI rather than triggering a
+ // six-frame burst merely because authority frames remain queued.
+ for(let n=0;n<7;n++){host.tick();await flush();}
+ const restoreCost=guest.costRuns(20);
+ for(let n=0;n<5;n++){const before=guest.machine._onlineCampaign.state.frame;guest.tick();await flush();assert.equal(guest.machine._onlineCampaign.state.frame-before,1,'a 20ms emulation step exhausts the catch-up time budget');}
+ restoreCost();for(let n=0;n<20&&host.machine._onlineCampaign.state.frame!==guest.machine._onlineCampaign.state.frame;n++){guest.tick();await flush();}
+ same(host.machine.RAM,guest.machine.RAM);assert.equal(host.machine.PC,guest.machine.PC);
+ assert.ok(host.machine._onlineCampaign.state.frame>=120,'checksummed gameplay continues after the lag');
+ assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='progress')),'guest reports processed frame progress');
+ await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
+ process.stdout.write(JSON.stringify({scenario,frames:host.machine._onlineCampaign.state.frame,maxLead:lead,catchUp:true,timeBudget:true}));
+}else if(scenario){
  let delayedFrames=0;
  if(scenario==='pause-delay'){
   delayPauseRequest=true;await guest.e.get('pause-btn').click();await flush();
@@ -151,7 +192,7 @@ await host.e.get('pause-btn').click();await flush();const paused=host.e.get('fra
 await host.e.get('room-leave').click();await guest.e.get('room-leave').click();await flush();
 // Import the exported checkpoint, retaining original player IDs/upgrades but
 // requesting world4 stage4, then exercise the actual fresh-level boot path.
-saved.state.RAM[0x84a]=3;saved.state.RAM[0x84b]=3;const saveModule=await host.load('dist/save-state.js'),checkpoint=await saveModule.encodeSave(saved);
+saved.state.RAM[0x84a]=3;saved.state.RAM[0x84b]=3;saved.session.onlineRoom.revision='0.4.0';const saveModule=await host.load('dist/save-state.js'),checkpoint=await saveModule.encodeSave(saved);
 await host.e.get('save-input').listeners.change({target:{files:[checkpoint],value:'x'}});assert.match(host.e.get('save-status').textContent,/Online save selected/);assert.match(host.e.get('room-checkpoint').textContent,/level 4-4/);
 assertColorUI(host,'black');
 await guest.e.get('open-menu-btn').click();for(let i=0;i<110;i++)guest.tick();await guest.key('ArrowDown');await guest.key('ArrowDown');await guest.key('Enter');await guest.key('ArrowDown');await guest.key('Enter');await join();await synchronize();await advance(3);

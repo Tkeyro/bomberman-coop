@@ -11,11 +11,12 @@ function clock(){
   async fire(ms){const entry=[...pending].find(([,v])=>v.ms===ms);assert.ok(entry,`a ${ms}ms timer is scheduled`);pending.delete(entry[0]);await entry[1].fn();}};
 }
 function lobby(){
- let room=null,serial=0;const tokens=new Map(),signals=[],calls=[];let holdNextGet=null,holdNextJoin=null;
+ let room=null,serial=0;const tokens=new Map(),signals=[],calls=[],failures=[];let holdNextGet=null,holdNextJoin=null;
  const response=(status,data)=>({ok:status<400,status,json:async()=>structuredClone(data)});
  async function fetch(url,options){
   await Promise.resolve();const method=options.method,body=options.body===undefined?undefined:JSON.parse(options.body),auth=options.headers.Authorization;
   calls.push({url,method,headers:{...options.headers},body});const path=new URL(url,'https://test.invalid').pathname;
+  const failureIndex=failures.findIndex(f=>f.method===method&&path.endsWith(f.suffix));if(failureIndex>=0){const failure=failures.splice(failureIndex,1)[0];if(failure.error)throw failure.error;if(failure.jsonError)return {ok:failure.status<400,status:failure.status,json:async()=>{throw new SyntaxError('truncated response');}};return response(failure.status,failure.data??{error:'Temporary lobby service problem.'});}
   if(path==='/api/rooms'&&method==='POST'){
    const id=body.playerId,token=`token-${id}`;tokens.set(token,id);room={code:'ABC123',hostId:id,players:[{id,name:body.name,color:body.color,connected:true}],phase:'lobby'};return response(201,{room,token});
   }
@@ -37,7 +38,7 @@ function lobby(){
   if(path.endsWith('/heartbeat'))return response(200,{ok:true});
   return response(404,{error:'Unknown lobby endpoint.'});
  }
- return {fetch,calls,signals,get room(){return room;},inject(from,to,type,data){signals.push({id:++serial,from,to,type,data});},holdGet(){const hold=deferred();holdNextGet=hold;return hold;},holdJoin(){const hold=deferred();holdNextJoin=hold;return hold;}};
+ return {fetch,calls,signals,failNext(failure,{method='GET',suffix=''}={}){failures.push({...failure,method,suffix});},get room(){return room;},inject(from,to,type,data){signals.push({id:++serial,from,to,type,data});},holdGet(){const hold=deferred();holdNextGet=hold;return hold;},holdJoin(){const hold=deferred();holdNextJoin=hold;return hold;}};
 }
 function peerNetwork(){
  const peers=new Map(),channels=[];let serial=0;
@@ -93,10 +94,10 @@ function entryServer({holdEntries=true,holdLeaves=false}={}){
 }
 function fixture(t){
  const service=lobby(),network=peerNetwork(),members=[];
- function member(id){const events={rooms:[],ready:[],data:[],errors:[],disconnected:[]},time=clock();
+ function member(id){const events={rooms:[],ready:[],data:[],errors:[],disconnected:[],status:[]},time=clock();
   const client=createOnlineRoom({playerId:id,fetch:service.fetch,Peer:network.Peer,timer:time.timer,cancel:time.cancel,
    onRoom:(room,status)=>events.rooms.push({room:structuredClone(room),status}),onReady:room=>events.ready.push(structuredClone(room)),
-   onData:(packet,from)=>events.data.push({packet,from}),onError:error=>events.errors.push(error),onDisconnected:id=>events.disconnected.push(id)});
+   onData:(packet,from)=>events.data.push({packet,from}),onError:error=>events.errors.push(error),onDisconnected:id=>events.disconnected.push(id),onStatus:(message,status)=>events.status.push({message,...status})});
   const result={id,client,events,time};members.push(result);return result;
  }
  t.after(async()=>{for(const m of members)await m.client.leave();await flush();});
@@ -163,7 +164,7 @@ test('malformed transfers release their bounded slots so a later host snapshot c
 test('a transfer times out under sustained backpressure and reports a bounded send failure',async t=>{
  const f=fixture(t),{host}=await f.pair(),channel=[...f.network.peers.values()].find(p=>p.localDescription.type==='offer').channel;
  channel.hold=true;channel.bufferedAmount=70000;const sending=host.client.sendSnapshot(new Blob(['checkpoint']));const rejected=assert.rejects(sending,/timed out/i);await flush();await host.time.fire(10000);await rejected;
- assert.equal(channel.sent.length,0);channel.bufferedAmount=1024*1024+1;assert.equal(host.client.broadcast({type:'frame',frame:1,inputs:[0,0]}),false);assert.ok(host.events.disconnected.length);
+ assert.equal(channel.sent.length,0);channel.bufferedAmount=1024*1024+1;assert.equal(host.client.broadcast({type:'frames',start:1,inputs:[0,0]}),false);assert.ok(host.events.disconnected.length);
 });
 test('leaving during an in-flight poll keeps the room closed and does not revive stale peers',async t=>{
  const f=fixture(t),{host,guest}=await f.pair(),hold=f.service.holdGet();const pending=guest.client.poll();await flush();assert.ok(hold.captured);await guest.client.leave();const callbacks=guest.events.rooms.length;hold.resolve();await pending;await flush();
@@ -190,4 +191,68 @@ test('a slow authenticated leave cannot erase a newer room or let the superseded
  const creating=client.create({name:'Newest',color:'red'});assert.equal((await creating).code,'CREATED2');service.leaves[0].resolve();assert.equal(await joining,null);assert.equal(client.room.code,'CREATED2');assert.equal(service.entries.some(entry=>entry.code==='JOINED'),false,'the cancelled join does not run after the delayed leave');
  await client.update({color:'yellow'});assert.equal(service.calls.at(-1).headers.Authorization,'Bearer '+service.entries[1].data.token);assert.equal(service.tokens.has(original.data.token),false);assert.equal(client.room.players[0].color,'yellow');
  const leaving=client.leave();await flush();service.leaves.at(-1).resolve();await leaving;assert.equal(time.pending.size,0);assert.equal(service.tokens.size,0);
+});
+test('temporary lobby outages back off without pausing healthy peer gameplay and clear the warning after recovery',async t=>{
+ const f=fixture(t),{host,guest}=await f.pair();
+ const failures=[{status:503,jsonError:true},{error:new TypeError('network unavailable')},{status:429},{status:502}];
+ for(let i=0;i<failures.length;i++){
+  f.service.failNext(failures[i]);if(i===0)await host.client.poll();else await host.time.fire(Math.min(8000,1000*2**i));
+  assert.equal(host.events.errors.length,0,'background service interruptions are separate from gameplay failure');assert.equal(host.events.disconnected.length,0);assert.equal(host.client.connected(),true);
+  assert.equal(host.events.status.at(-1).attempts,i+1);assert.equal(host.events.status.at(-1).retrying,true);assert.ok(host.events.status.at(-1).message.includes('Retrying'));
+  assert.ok([...host.time.pending.values()].some(v=>v.ms===Math.min(8000,1000*2**(i+1))));
+  assert.equal(host.client.broadcast({type:'frames',start:i,inputs:[0,0]}),true);await flush();assert.equal(guest.events.data.at(-1).packet.start,i,'RTC gameplay stays usable while the HTTP service recovers');
+ }
+ await host.time.fire(8000);assert.deepEqual(host.events.status.at(-1),{message:'',retrying:false,attempts:0});assert.ok([...host.time.pending.values()].some(v=>v.ms===1000));
+});
+test('a temporary heartbeat outage preserves the room and its next successful poll restores normal service status',async t=>{
+ const f=fixture(t),{host,guest}=await f.pair();f.service.failNext({status:503},{method:'POST',suffix:'/heartbeat'});
+ for(let i=0;i<10&&!host.events.status.length;i++)await host.client.poll();assert.equal(host.events.status.at(-1).retrying,true);assert.equal(host.events.errors.length,0);assert.equal(host.client.connected(),true);
+ assert.equal(guest.client.toHost({type:'input',mask:5}),true);await flush();assert.equal(host.events.data.at(-1).packet.mask,5);
+ await host.time.fire(2000);assert.equal(host.events.status.at(-1).retrying,false);
+});
+test('authorization, missing rooms, invalid successful data and malformed signals are reported as failures rather than retries',async t=>{
+ const f=fixture(t),{host,guest}=await f.pair();
+ for(const failure of [{status:403,data:{error:'Invalid membership token.'}},{status:404,data:{error:'Lobby has expired.'}},{status:200,jsonError:true},{status:200,data:{signals:[],lastId:0}},{status:200,data:{room:structuredClone(f.service.room),signals:'bad',lastId:0}}]){
+  const before=host.events.errors.length;f.service.failNext(failure);await host.client.poll();assert.equal(host.events.errors.length,before+1);assert.equal(host.events.status.length,0);
+ }
+ f.service.inject(guest.id,host.id,'unknown-signal',{broken:true});await host.client.poll();assert.match(host.events.errors.at(-1).message,/Invalid player connection signal/);assert.equal(host.events.status.length,0);
+});
+test('writable preflight waits for any slow peer, while broadcasts avoid delivering a frame to only part of the room',async t=>{
+ const f=fixture(t),{host,guest}=await f.pair(),third=f.member('third-player-0001');await third.client.join('ABC123',{name:'Third',color:'red'});await f.settle();
+ const outgoing=[...f.network.peers.values()].filter(p=>p.localDescription.type==='offer').map(p=>p.channel);assert.equal(outgoing.length,2);assert.equal(host.client.writable(),true);assert.equal(guest.client.writable(),true);
+ const slow=outgoing[1];slow.bufferedAmount=70000;assert.equal(host.client.writable(),false);assert.equal(host.events.disconnected.length,0);assert.equal(host.client.broadcast({type:'pause',reason:'Waiting for players.'}),true,'ordered control messages can follow a modest queue');await flush();
+ slow.bufferedAmount=1024*1024+1;const firstCount=outgoing[0].sent.length;assert.equal(host.client.broadcast({type:'frames',start:0,inputs:[0,0,0]}),false);assert.equal(outgoing[0].sent.length,firstCount,'a failed broadcast never advances only one peer');assert.ok(host.events.disconnected.length);
+ slow.drain();assert.equal(host.client.writable(),true);slow.readyState='closed';assert.equal(host.client.writable(),false);assert.equal(host.client.connected(),false);
+});
+test('temporary late ICE signaling failures preserve established gameplay, while authorization and invalid responses remain fatal',async t=>{
+ const f=fixture(t),{host,guest}=await f.pair(),peer=[...f.network.peers.values()].find(p=>p.localDescription.type==='offer');
+ const candidate=()=>({candidate:{candidate:'optional-late-ice',toJSON(){return {candidate:this.candidate};}}});
+ for(const failure of [{error:new TypeError('temporary network failure')},{status:503,jsonError:true},{status:429}]){
+  f.service.failNext(failure,{method:'POST',suffix:'/signals'});peer.onicecandidate(candidate());await flush();assert.equal(host.events.errors.length,0);assert.equal(host.events.disconnected.length,0);assert.equal(host.events.status.at(-1).retrying,true);
+  assert.equal(host.client.broadcast({type:'frames',start:7,inputs:[0,0]}),true);await flush();assert.equal(guest.events.data.at(-1).packet.start,7);
+  await host.client.poll();assert.equal(host.events.status.at(-1).retrying,false,'the next successful poll clears the temporary service warning');
+ }
+ for(const failure of [{status:401,data:{error:'Membership token rejected.'}},{status:200,jsonError:true}]){
+  const before=host.events.errors.length;f.service.failNext(failure,{method:'POST',suffix:'/signals'});peer.onicecandidate(candidate());await flush();assert.equal(host.events.errors.length,before+1);assert.equal(host.events.status.at(-1).retrying,false,'invalid membership or server data does not become a retry warning');
+ }
+});
+test('a temporary ICE signaling failure before the peer is connected still reports startup failure',async t=>{
+ const f=fixture(t),host=f.member('host-player-00001'),guest=f.member('guest-player-0001');await host.client.create({name:'Host',color:'black'});await guest.client.join('ABC123',{name:'Guest',color:'orange'});
+ f.service.failNext({error:new TypeError('network unavailable during negotiation')},{method:'POST',suffix:'/signals'});await host.client.poll();await flush();
+ assert.equal(host.client.connected(),false);assert.equal(host.events.errors.length,1);assert.equal(host.events.status.length,0,'a missing initial negotiation candidate is not mistaken for optional late ICE');
+});
+test('queued ICE from a replaced peer cannot use a new room membership token',async t=>{
+ const f=fixture(t),{host,guest}=await f.pair(),oldPeer=[...f.network.peers.values()].find(p=>p.localDescription.type==='offer');
+ await host.client.leave();await host.client.create({name:'New host',color:'black'});await guest.client.join('ABC123',{name:'Rejoined guest',color:'orange'});await f.settle();assert.equal(host.client.connected(),true);
+ const count=f.calls.length;oldPeer.onicecandidate({candidate:{candidate:'stale-old-peer',toJSON(){return {candidate:this.candidate};}}});await flush();assert.equal(f.calls.length,count,'a late event from the old peer never reaches the new room signaling endpoint');
+ const counts={rooms:host.events.rooms.length,errors:host.events.errors.length,disconnected:host.events.disconnected.length};oldPeer.ondatachannel({channel:oldPeer.channel});oldPeer.channel.onclose();oldPeer.channel.onerror();oldPeer.connectionState='disconnected';oldPeer.onconnectionstatechange();oldPeer.channel.onmessage({data:'not-json'});await flush();assert.deepEqual({rooms:host.events.rooms.length,errors:host.events.errors.length,disconnected:host.events.disconnected.length},counts,'old peer channel, close, error, state and message callbacks cannot affect the fresh room');assert.equal(host.client.writable(),true,'a stale channel event never replaces the fresh peer channel');
+});
+test('a fatal pause reaches healthy players after one peer is blocked, while frame broadcasts remain atomic',async t=>{
+ const f=fixture(t),{host,guest}=await f.pair(),third=f.member('third-player-0001');await third.client.join('ABC123',{name:'Third',color:'red'});await f.settle();
+ const outgoing=[...f.network.peers.values()].filter(p=>p.localDescription.type==='offer').map(p=>p.channel),blocked=outgoing[1];
+ for(const cause of ['overflow','closed']){
+  if(cause==='overflow')blocked.bufferedAmount=1024*1024+1;else{blocked.bufferedAmount=0;blocked.readyState='closed';}
+  const before=outgoing[0].sent.length;assert.equal(host.client.broadcast({type:'frames',start:50,inputs:[0,0,0]}),false);assert.equal(outgoing[0].sent.length,before,'no healthy peer receives an isolated frame');
+  const callbacks=host.events.disconnected.length;assert.equal(host.client.broadcast({type:'pause',fatal:true,reason:'A player disconnected.'}),false);await flush();assert.equal(guest.events.data.at(-1).packet.type,'pause');assert.equal(guest.events.data.at(-1).packet.fatal,true);assert.equal(host.events.disconnected.length,callbacks,'control broadcast skips bad channels without another disconnect callback');
+ }
 });

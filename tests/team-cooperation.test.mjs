@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
 import {createMachine,frames} from '../scripts/headless.mjs';
-import {createCompanions,spawnItem,spawnEnemy,enemies,bombs,blastCells,tileKind,validateCompanionState} from '../dist/campaign.js';
+import {createCompanions,spawnItem,spawnEnemy,spawnBomb,enemies,bombs,blastCells,tileKind,validateCompanionState} from '../dist/campaign.js';
 import {createIntroSkip} from '../dist/intro.js';import {launchSequence} from '../dist/battle-ai.js';
 import {captureState,restoreState} from '../dist/save-state.js';
 const rom=process.env.BOMBERMAN_TEST_ROM;let baseline,tracking,bytes,template;
@@ -48,11 +48,11 @@ test('bomb placement protects teammates current and intended next tiles, then re
   assert.ok(crew.state.bots.some(b=>b.bombsPlaced),JSON.stringify({reason:'team yields and eventually permits a useful bomb',next,bots:crew.state.bots}));assert.equal(tileKind(p,5,6),10,'friendly fire prevention does not permanently stall block clearing');assert.ok(crew.state.bots.every(b=>b.alive));
  }
 });
-test('head-on teammates yield or exchange work rather than overlap or freeze in a corridor with a side bay',{skip:!rom},()=>{
+test('head-on teammates pass, yield or exchange work and finish both jobs in a corridor with a side bay',{skip:!rom},()=>{
  const {p,crew}=setup({solid:true});for(let x=2;x<=12;x++)p.RAM[0x44a+5*32+x]=0xca;for(const y of [3,4])p.RAM[0x44a+y*32+7]=0xca;
  const a=crew.add(4,5),b=crew.add(10,5);spawnItem(p,1,12,5);spawnItem(p,1,2,5);a.goal={kind:'item',x:12,y:5};b.goal={kind:'item',x:2,y:5};a.cooldown=b.cooldown=1000;let side=false,yielded=false,exchanged=false;
- for(let i=0;i<360;i++){crew.update();separate(crew.state.bots);if(a.y<83||b.y<83)side=true;if(crew.state.bots.some(actor=>actor.yieldFrames||actor.action.includes('teammate')))yielded=true;if(a.goal?.kind==='item'&&a.goal.x===2||b.goal?.kind==='item'&&b.goal.x===12)exchanged=true;}
- assert.ok(side||yielded||exchanged,'the team resolves opposing routes through yielding or a task exchange');assert.equal(a.pickupsCollected+b.pickupsCollected,2,'both endpoints are serviced without a corridor stall');assert.ok(a.pickupsCollected&&b.pickupsCollected,'each teammate completes work');assert.ok(Math.abs(a.x-b.x)>=16||Math.abs(a.y-b.y)>=16);
+ let passed=false;for(let i=0;i<360;i++){crew.update();if(overlap(crew.state.bots)>0)passed=true;if(a.y<83||b.y<83)side=true;if(crew.state.bots.some(actor=>actor.yieldFrames||actor.action.includes('teammate')))yielded=true;if(a.goal?.kind==='item'&&a.goal.x===2||b.goal?.kind==='item'&&b.goal.x===12)exchanged=true;}
+ assert.ok(side||yielded||exchanged||passed,'the team resolves opposing routes through passing, yielding or a task exchange');assert.equal(a.pickupsCollected+b.pickupsCollected,2,'both endpoints are serviced without a corridor stall');assert.ok(a.pickupsCollected&&b.pickupsCollected,'each teammate completes work');assert.ok(Math.abs(a.x-b.x)>=16||Math.abs(a.y-b.y)>=16);
 });
 test('old overlapping teams separate without increasing overlap and optional cooperation fields validate',{skip:!rom},()=>{
  const {crew}=setup(),team=[[4,4],[6,4],[4,6],[6,6]].map(([x,y])=>crew.add(x,y)),targets=[{x:6,y:5},{x:4,y:5},{x:5,y:4},{x:5,y:6}];
@@ -68,6 +68,35 @@ test('a teammate respects the human feet and chooses free space around an occupi
 test('an off-center teammate can finish centering in its own reserved tile and both actors recover',{skip:!rom},()=>{
  const {p,crew}=setup({solid:true});for(let x=2;x<=12;x++)p.RAM[0x44a+5*32+x]=0xca;for(const y of [3,4])p.RAM[0x44a+y*32+7]=0xca;
  const a=crew.add(8,5),b=crew.add(9,5);b.x=152.25;a.target=b.target={x:9,y:5};a.goal={kind:'item',x:12,y:5};b.goal={kind:'item',x:2,y:5};a.cooldown=b.cooldown=1000;spawnItem(p,1,12,5);spawnItem(p,1,2,5);let centered=false,movedA=false,movedB=false;
- for(let i=0;i<360;i++){crew.update();separate(crew.state.bots);if(b.x===152&&b.y===88)centered=true;if(Math.abs(a.x-136)+Math.abs(a.y-88)>=16)movedA=true;if(Math.abs(b.x-152.25)+Math.abs(b.y-88)>=16)movedB=true;}
+ for(let i=0;i<360;i++){crew.update();if(b.x===152&&b.y===88)centered=true;if(Math.abs(a.x-136)+Math.abs(a.y-88)>=16)movedA=true;if(Math.abs(b.x-152.25)+Math.abs(b.y-88)>=16)movedB=true;}
  assert.ok(centered,'the actor may safely center in the tile it already occupies');assert.ok(movedA&&movedB,'both actors recover from the initial conflicting reservation');assert.equal(a.pickupsCollected+b.pickupsCollected,2,'the autonomous planner continues servicing goals after centering');
+});
+test('teammates can pass through each other in a one-tile lane with no side bay and then spread out',{skip:!rom},()=>{
+ const {p,crew}=setup({solid:true});for(let x=2;x<=12;x++)p.RAM[0x44a+5*32+x]=0xca;
+ const a=crew.add(4,5),b=crew.add(10,5);spawnItem(p,1,12,5);spawnItem(p,1,2,5);a.goal={kind:'item',x:12,y:5};b.goal={kind:'item',x:2,y:5};a.cooldown=b.cooldown=1000;let passed=false;
+ for(let i=0;i<300;i++){crew.update();if(overlap(crew.state.bots)>0)passed=true;}
+ assert.ok(passed,'temporary overlap permits both committed routes through the narrow lane');assert.equal(a.pickupsCollected,1);assert.equal(b.pickupsCollected,1);separate(crew.state.bots);assert.ok(Math.abs(a.x-b.x)>100,'teammates resume distinct work instead of remaining piled up');
+});
+test('a later teammate requests shelter before bombing the blocked top corridor and replays the request exactly',{skip:!rom},()=>{
+ const {p,crew,step}=setup({solid:true});for(const [x,y]of [[2,1],[3,1],[2,2],[5,1],[5,2]])p.RAM[0x44a+y*32+x]=0xca;for(const [x,y]of [[4,1],[2,3]])p.RAM[0x44a+y*32+x]=0xc2;
+ const friend=crew.add(2,1),bomber=crew.add(3,1);friend.cooldown=1000;
+ crew.update();assert.equal(bomber.bombsPlaced,0,'the stationary teammate is in the planned blast');assert.match(bomber.action,/Waiting for teammates/);
+ for(let i=0;i<8;i++)step();assert.match(friend.action,/Making room/,'the earlier actor sees the later actor request on the following tick');assert.ok(friend.y>24,'the earlier actor actively evacuates down the side lane');
+ const save=captureState(p),state=structuredClone(crew.state),tracker={...p._campaignTracker};
+ for(let i=0;i<240;i++)step();const expected={ram:[...p.RAM],state:structuredClone(crew.state),pixels:Uint8ClampedArray.from(p.ImageData.data)};
+ assert.ok(bomber.bombsPlaced>0,'the peer reservation does not veto the bomber escape route');assert.equal(tileKind(p,4,1),10,'the blocking wall is cleared');assert.ok(crew.state.bots.every(b=>b.alive),'the evacuation keeps both teammates alive');
+ restoreState(p,save);crew.restore(state);Object.assign(p._campaignTracker,tracker);for(let i=0;i<240;i++)step();assert.deepEqual(p.RAM,expected.ram);assert.deepEqual(crew.state,expected.state);assert.deepEqual(p.ImageData.data,expected.pixels);
+});
+test('a teammate may share the only safe refuge so a three-bot corridor can be opened',{skip:!rom},()=>{
+ const {p,crew,step}=setup({solid:true});for(const [x,y]of [[2,1],[3,1],[2,2],[5,1],[5,2]])p.RAM[0x44a+y*32+x]=0xca;p.RAM[0x44a+1*32+4]=0xc2;
+ const friend=crew.add(2,1),refuge=crew.add(2,2),bomber=crew.add(3,1);friend.cooldown=refuge.cooldown=1000;bomber.goal={kind:'block',x:4,y:1};let shared=false;
+ for(let i=0;i<250;i++){step();if(overlap([friend,refuge])>0)shared=true;}
+ assert.ok(shared,'a refuge occupied by an AI is still available when no free refuge exists');assert.ok(bomber.bombsPlaced>0);assert.equal(tileKind(p,4,1),10);assert.ok(crew.state.bots.every(b=>b.alive),'sharing the refuge does not relax the placement blast guard');
+});
+test('planned-bomb evacuation crosses teammates while avoiding an unrelated live bomb blast',{skip:!rom},()=>{
+ const {p,crew}=setup({solid:true});for(const [x,y]of [[2,1],[3,1],[2,2],[2,3],[2,4],[3,2],[3,3]])p.RAM[0x44a+y*32+x]=0xca;p.RAM[0x44a+1*32+4]=0xc2;
+ const friend=crew.add(2,1),bomber=crew.add(3,1);friend.cooldown=1000;bomber.goal={kind:'block',x:4,y:1};const active=spawnBomb(p,2,4,{slots:[0]});crew.state.bombRanges[active]=2;
+ crew.update();assert.match(friend.action,/Making room/);assert.deepEqual({x:friend.target.x,y:friend.target.y},{x:3,y:1},'evacuation takes the peer-occupied route instead of entering the live blast at 2,2');assert.equal(bomber.bombsPlaced,0,'the bombing actor waits while the evacuation crosses its position');
+ for(let i=0;i<80;i++){crew.update();assert.ok(!['2,2','2,3','2,4'].includes(tile(friend)),'a request does not permit crossing unrelated bomb danger');}
+ assert.ok(bomber.bombsPlaced>0,'the safe evacuation still permits useful block clearing');
 });

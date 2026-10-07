@@ -2,6 +2,8 @@
 
 Browser extension for **Bomberman (1990), TurboGrafx-16, USA**. Public source: [Tkeyro/bomberman-coop](https://github.com/Tkeyro/bomberman-coop). Each player supplies the same verified game file locally.
 
+**v0.4.4 allows AI teammates to pass through each other while preferring separate routes and goals.** Bots coordinate a firing position and wait for teammates to reach shelter before bombing. Round placement uses safe floor connected to the original entrance, including temporary overlap when the opening is small. Surviving admin-added DLC teammates retain their identities, colors and upgrades into the next round. Online guests can catch up after falling behind; the host limits outstanding frames instead of letting delay grow into a queue overflow. Temporary lobby-service interruptions retry while healthy peer gameplay continues.
+
 **v0.4.3 gives Solo AI the original finite campaign life stock.** When its final life is lost, the original death music and fade finish and the main menu becomes usable again. Solo AI no longer receives a forced spare life on each defeat. Existing cooperative watch and online team retry rules are preserved.
 
 **v0.4.2 fixes reproduced online startup and pause/resume freezes.** Browser audio can no longer block snapshot synchronization, and guests keep authoritative frames that arrive while paused. Startup and pause status are visible, and incomplete startup reports a timeout. The idle demo is disabled while the custom menu is open. Original single-player Campaign now asks Human or AI before the world picker; AI watches one bot in the chosen world. Bots reject bombs and remote detonations whose blast would reach an exposed blue exit, including existing bomb chains.
@@ -18,7 +20,7 @@ Choose your color before starting. The original title screen contains these five
 
 | Main menu | Selection |
 | --- | --- |
-| **1P - CAMPAIGN** | World submenu: **1-0**, **2-0** through **8-0**. Start at the selected world's first regular stage. |
+| **1P - CAMPAIGN** | Choose **HUMAN** or **AI**, then the world submenu: **1-0**, **2-0** through **8-0**. Start at the selected world's first regular stage. |
 | **1P - DLC** | Generated larger campaign maps, with optional local AI/watch counts. |
 | **2-5P - CAMPAIGN** | Choose **AI** or **ONLINE**. |
 | **2-5P - BATTLE** | Choose **AI** or **ONLINE**; both use original Battle rules. |
@@ -83,7 +85,7 @@ In a local campaign stage, **F2/Admin** pauses play. Select a tool once, then cl
 
 The inventory has all 15 native item IDs and icons for all 45 living enemy actor models, including boss forms/parts. **All 23 regular enemy types can spawn in any active campaign stage, even after the last native enemy dies.** They use their native initialization, movement and bomb damage. Their runtime graphics remain private to their sprites so mixed species do not replace player or stage art. Boss entries remain previews: spawning a component alone would omit the coordinated actor groups and shared state of a complete boss encounter. Original slot limits still apply. A spawned item takes effect when collected; the fireproof vest protects against bomb blasts for about 60 seconds, while monsters still hurt its wearer.
 
-Local AI uses separate targets for useful items, blocks and enemy bombing positions. It reserves occupied and intended next cells, yields into available space when routes conflict, and can separate older saved actors that started overlapped. It refuses a new bomb whose blast contains a teammate's current or intended next tile. These guards complement existing monster prediction, escape routes, item protection and final-item-before-exit priorities. They reduce crowding and friendly fire but cannot guarantee survival or solve every blocked corridor.
+Local AI uses separate targets for useful items, blocks and enemy bombing positions. Routes prefer free lanes, while teammates may pass through or temporarily overlap one another in narrow spaces. A pending bomber holds its firing position and asks teammates to reach shelter; placement still waits until their current and intended next cells clear its blast. Bots retain terrain collision, monster prediction, escape routes, visible-item protection and final-item-before-exit priorities. Safe next-round positions stay connected to the original entrance instead of falling back to isolated floor pockets. AI remains experimental and can still be defeated.
 
 Beneficial **campaign team** pickups are shared across the native human and every AI/online teammate. Fire range and bomb allowance cap at five per actor in cooperative modes; each actor keeps its own active bomb slots. Shoes match the native increase from 0.75 to 1 pixel per frame and do not stack. Remote/pass powers, vest duration and extra-life rewards reach the team; lives are consumed individually. Skull curses are excluded from shared rewards. A new teammate inherits the team's current upgrades. Original one-player pickup behavior remains native until a cooperative team is added; Battle remains competitive.
 

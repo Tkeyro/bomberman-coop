@@ -82,7 +82,24 @@ test('ROM loader, native keyboard menu, paused inventory and save import/export 
   for(let n=0;n<200&&!elements.get('save-status').textContent.startsWith('Save loaded');n++)await new Promise(resolve=>setTimeout(resolve,10));
   assert.match(elements.get('save-status').textContent,/Save loaded/);assert.equal(elements.get('frame-count').textContent,quickFrame);assert.equal(elements.get('pause-btn').textContent,'Resume');
   await elements.get('open-menu-btn').click();for(let n=0;n<110;n++){clock+=50;nextFrame(clock);}await key('ArrowDown');await key('ArrowLeft');assert.equal(elements.get('player-count-select').value,'1');await key('Enter');
-  for(let n=0;n<970&&!/DLC.*STAGE 1/.test(elements.get('mode-label').textContent);n++){clock+=50;nextFrame(clock);}assert.match(elements.get('mode-label').textContent,/DLC.*STAGE 1/);assert.equal(elements.get('player-count').textContent,'1P');await elements.get('admin-btn').click();assert.ok(elements.get('admin-map').children.length>400);await elements.get('admin-close').click();
+  for(let n=0;n<970&&!/DLC.*STAGE 1/.test(elements.get('mode-label').textContent);n++){clock+=50;nextFrame(clock);}assert.match(elements.get('mode-label').textContent,/DLC.*STAGE 1/);assert.equal(elements.get('player-count').textContent,'1P');await elements.get('admin-btn').click();assert.ok(elements.get('admin-map').children.length>400);
+  // Admin-added actors must survive an actual app-driven generated round clear
+  // with their identities and upgrades intact, then start near the new entrance.
+  await elements.get('spawn-bot').click();
+  const botTiles=elements.get('admin-map').children.filter(tile=>!tile.disabled&&tile.textContent!=='P'&&tile.textContent!=='AI').slice(-2).map(tile=>tile.title);
+  assert.equal(botTiles.length,2);
+  for(const title of botTiles)await elements.get('admin-map').children.find(tile=>tile.title===title).click();
+  await elements.get('save-btn').click();const {decodeSave:readCrewSave}=await import('../dist/save-state.js');
+  const previousCrew=(await readCrewSave(stored)).session.companions.bots;
+  assert.equal(previousCrew.length,2,'two teammates were added during the solo DLC round');
+  machine._levelObjective.state.enabled=false;machine.RAM.fill(0,0xd98,0xdb8);machine.RAM[0xd96]=1;machine.RAM[0x437]=1;
+  await elements.get('admin-close').click();
+  for(let n=0;n<250&&machine._newCampaign.round===1;n++){clock+=50;nextFrame(clock);}
+  assert.equal(machine._newCampaign.round,2,'the native stage sequence loads the next generated round');
+  await elements.get('save-btn').click();const nextCrew=(await readCrewSave(stored)).session.companions.bots;
+  assert.deepEqual(nextCrew.map(b=>({id:b.id,color:b.color,bombCapacity:b.bombCapacity,fireRange:b.fireRange})),previousCrew.map(b=>({id:b.id,color:b.color,bombCapacity:b.bombCapacity,fireRange:b.fireRange})), 'the app retains admin teammates rather than resetting to the menu count');
+  for(const bot of nextCrew){const x=Math.floor(bot.x/16),y=Math.floor(bot.y/16);assert.ok(x>=2&&x<=6&&y>=1&&y<=3,'next-round teammates use the safe starting area');assert.equal(machine.RAM[0x44a+y*32+x]&31,10,'actors spawn on actual empty floor');}
+
   await elements.get('open-menu-btn').click();for(let n=0;n<110;n++){clock+=50;nextFrame(clock);}await key('ArrowDown');for(let n=0;n<4;n++)await key('ArrowRight');await key('Enter');for(let n=0;n<970&&elements.get('player-count').textContent!=='5P';n++){clock+=50;nextFrame(clock);}assert.equal(elements.get('player-count-select').value,'5');assert.equal(elements.get('player-count').textContent,'5P','all four teammates spawn despite the guaranteed starting pickup');
   await elements.get('open-menu-btn').click();for(let n=0;n<110;n++){clock+=50;nextFrame(clock);}await key('ArrowDown');elements.get('player-count-select').value='-4';elements.get('player-count-select').listeners.change({target:elements.get('player-count-select')});assert.match(elements.get('menu-status').textContent,/AI only/);await key('Enter');for(let n=0;n<970&&elements.get('player-count').textContent!=='4 AI';n++){clock+=50;nextFrame(clock);}assert.match(elements.get('mode-label').textContent,/WATCH/);assert.equal(elements.get('player-count').textContent,'4 AI');assert.match(elements.get('game-canvas').attributes['aria-label'],/spectator/);await key('ArrowRight');await key('Space');for(let n=0;n<60;n++){clock+=50;nextFrame(clock);}
   URL.createObjectURL=blob=>{exported=blob;return 'blob:watch';};URL.revokeObjectURL=()=>{};

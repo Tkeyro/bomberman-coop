@@ -25,3 +25,11 @@ test('guest pause preserves authoritative frames arriving before the host receiv
 test('online startup timeout reports a missing snapshot acknowledgement and blocks premature Resume',{skip:!process.env.BOMBERMAN_TEST_ROM,timeout:90000},async()=>{
  const result=await probe('ack-timeout');assert.equal(result.scenario,'ack-timeout');assert.equal(result.startupTimeout,true);assert.equal(result.blockedResume,true);assert.equal(result.droppedLoaded,1);
 });
+
+test('a delayed guest bounds the host lead, catches up and retains exact checksummed state',{skip:!process.env.BOMBERMAN_TEST_ROM,timeout:90000},async()=>{
+ const result=await probe('guest-lag');assert.equal(result.scenario,'guest-lag');assert.ok(result.maxLead<=18);assert.equal(result.catchUp,true);assert.equal(result.timeBudget,true);assert.ok(result.frames>=120);
+});
+
+test('departing third player invalidates the original roster for both remaining connected apps',{skip:!process.env.BOMBERMAN_TEST_ROM,timeout:90000},async()=>{
+ const result=await probe('player-departure');assert.equal(result.remainingPlayers,2);assert.equal(result.blockedResume,true);assert.equal(result.fatalReason,true);
+});
