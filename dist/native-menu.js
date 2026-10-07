@@ -13,6 +13,7 @@ export const watchBots=count=>count===0?4:count<0?-count:0;
 const playerChoices=mode=>mode==='new'?[1,2,3,4,5,-1,-2,-3,-4]:[2,3,4,5,-1,-2,-3,-4];
 const normalizeCount=(count,mode)=>count<=0?count===0?-4:Math.max(-4,Math.min(-1,count)):Math.min(5,Math.max(mode==='new'?1:2,count));
 const WORLD_OPTIONS=Array.from({length:8},(_,world)=>({label:`${world+1}-0`,mode:'solo',world}));
+const SOLO_OPTIONS=[{label:'HUMAN',mode:'solo'},{label:'AI',mode:'solo'}];
 const CAMPAIGN_OPTIONS=[{label:'AI',mode:'campaign'},{label:'ONLINE',mode:'online-campaign'}];
 const BATTLE_OPTIONS=[{label:'AI',mode:'battle-ai'},{label:'ONLINE',mode:'online-battle'}];
 // Copyright glyphs are already embedded in the title's background tiles.
@@ -28,26 +29,29 @@ function copyrightInk(v,x,y){
  return color===0x4f||(color===0x49&&[0,1].some(dy=>[0,1,2].some(dx=>y-dy>=216&&pixel(worldX-dx,y-dy)===0x4f)));
 }
 export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=()=>false}={}) {
- let active=false,rendering=false,departing=false,selected=0,count=2,hasSave=false,padHeld='',padFrames=0,page='main',parentSelection=0,dlcVisited=false,explicitCount=false;
- const bg=p.MakeBGLine,sprites=p.MakeSpriteLine,pads=p.CheckGamePad;
- const rows=()=>page==='worlds'?WORLD_OPTIONS:page==='campaign'?CAMPAIGN_OPTIONS:page==='battle'?BATTLE_OPTIONS:MENU_OPTIONS;
+ let active=false,rendering=false,departing=false,selected=0,count=2,soloCount=1,hasSave=false,padHeld='',padFrames=0,page='main',parents=[],dlcVisited=false,explicitCount=false;
+ const bg=p.MakeBGLine,sprites=p.MakeSpriteLine,pads=p.CheckGamePad,cpu=p.CPURun;
+ const rows=()=>page==='worlds'?WORLD_OPTIONS:page==='solo'?SOLO_OPTIONS:page==='campaign'?CAMPAIGN_OPTIONS:page==='battle'?BATTLE_OPTIONS:MENU_OPTIONS;
  const rowHeight=()=>page==='worlds'?11:ROW_HEIGHT;
  const entry=()=>rows()[selected];
- const snapshot=()=>({page,selected,count,label:entry().label,mode:entry().mode,hasSave,...(page==='worlds'?{world:entry().world}:{})});
+ const currentCount=()=>page==='solo'?(selected===1?-1:1):page==='worlds'?soloCount:count;
+ const snapshot=()=>({page,selected,count:currentCount(),label:entry().label,mode:entry().mode,hasSave,...(page==='worlds'?{world:entry().world}:{})});
  function announce(){onChange(snapshot());}
  function selectedRow(){if(page==='main'&&entry().mode==='new'&&!dlcVisited){if(count>0&&!explicitCount)count=1;dlcVisited=true;}}
- function openPage(next){parentSelection=selected;page=next;selected=0;if(page!=='worlds')count=normalizeCount(count,entry().mode);announce();}
- function back(){if(page==='main')return;page='main';selected=parentSelection;announce();}
+ function openPage(next){parents.push({page,selected});page=next;selected=0;if(!['solo','worlds'].includes(page))count=normalizeCount(count,entry().mode);announce();}
+ function back(){const parent=parents.pop();if(!parent)return;page=parent.page;selected=parent.selected;announce();}
  function choose(){
   if(!active)return;
   const choice=entry();
-  if(page==='main'&&choice.mode==='solo'){openPage('worlds');return;}
+  if(page==='main'&&choice.mode==='solo'){openPage('solo');return;}
+  if(page==='solo'){soloCount=selected===1?-1:1;openPage('worlds');return;}
   if(page==='main'&&(choice.mode==='campaign'||choice.mode==='battle')){openPage(choice.mode);return;}
-  onSelect(choice.mode,{count:page==='worlds'?1:count,...(page==='worlds'?{world:choice.world}:{})});
+  onSelect(choice.mode,{count:currentCount(),...(page==='worlds'?{world:choice.world}:{})});
  }
  function footer(){
   if(page==='worlds')return 'CHOOSE WORLD  II: BACK';
-  if(page==='main'&&entry().mode==='solo')return 'ENTER: CHOOSE WORLD';
+  if(page==='solo')return selected===1?'WATCH 1 AI  II: BACK':'PLAY AS HUMAN  II: BACK';
+  if(page==='main'&&entry().mode==='solo')return 'ENTER: HUMAN / AI';
   if(page==='main'&&['campaign','battle'].includes(entry().mode))return 'ENTER: AI / ONLINE';
   if(entry().mode==='load')return hasSave?'ENTER: LOAD SAVE':'NO SAVE IN THIS BROWSER';
   return count<0?`WATCH: ${watchBots(count)} AI  LEFT/RIGHT`:`PLAYERS: ${count}  LEFT/RIGHT`;
@@ -55,7 +59,7 @@ export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=(
  function input(button){
   if(!active)return false;
   if(button==='BACK'||button==='SHOT2'){back();}
-  else if(button==='UP'||button==='DOWN'){selected=(selected+(button==='UP'?rows().length-1:1))%rows().length;selectedRow();if(entry().mode.startsWith('online-'))count=Math.max(2,count);else if(count>0&&entry().mode!=='new')count=Math.max(2,count);announce();}
+  else if(button==='UP'||button==='DOWN'){selected=(selected+(button==='UP'?rows().length-1:1))%rows().length;selectedRow();if(!['solo','worlds'].includes(page)){if(entry().mode.startsWith('online-'))count=Math.max(2,count);else if(count>0&&entry().mode!=='new')count=Math.max(2,count);}announce();}
   else if(button==='LEFT'||button==='RIGHT'){
    if(page==='worlds'){selected=(selected+(button==='LEFT'?rows().length-1:1))%rows().length;announce();}
    else if((page==='main'&&entry().mode==='new')||page==='campaign'||page==='battle'){
@@ -66,6 +70,13 @@ export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=(
   else if(button==='RUN'||button==='SHOT1')choose();
   return true;
  }
+ p.CPURun=function(){
+  // Bank 1's title loop decrements the native 16-bit idle countdown here.
+  // Renew it only at expiry while our title is open, so no demo can launch.
+  // Stage/intro clocks and native title animation keep running unchanged.
+  if(rendering&&!departing&&this.PC===0xa5b6&&this.MPR[5]===8192&&this.VDC[0].SATB[2]===918&&this.RAM[0x13b9]===0&&this.RAM[0x13b8]<=1){this.RAM[0x13b8]=0xb0;this.RAM[0x13b9]=4;}
+  return cpu.call(this);
+ };
  p.MakeSpriteLine=function(n){
   if(n===0&&departing&&this.VDC[0].SATB[2]!==918){rendering=false;departing=false;}
   if(!rendering||n!==0||this.VDC[0].SATB[2]!==918)return sprites.call(this,n);
@@ -114,13 +125,13 @@ export function installNativeMenu(p,{onSelect=()=>{},onChange=()=>{},blockPads=(
   if(active||blockPads())for(const pad of this.GamePad){pad[0]=pad[1]=pad[2]=0xbf;pad[3]=0xb0;}
  };
  return {
-  prepare(players=2){count=normalizeCount(players,'solo');selected=0;page='main';parentSelection=0;dlcVisited=false;explicitCount=false;active=false;rendering=true;departing=false;padHeld='';padFrames=0;},
-  open(players=2){count=normalizeCount(players,'solo');selected=0;page='main';parentSelection=0;dlcVisited=false;explicitCount=false;active=true;rendering=true;departing=false;padHeld='';padFrames=0;announce();},
+  prepare(players=2){count=normalizeCount(players,'solo');soloCount=1;selected=0;page='main';parents=[];dlcVisited=false;explicitCount=false;active=false;rendering=true;departing=false;padHeld='';padFrames=0;},
+  open(players=2){count=normalizeCount(players,'solo');soloCount=1;selected=0;page='main';parents=[];dlcVisited=false;explicitCount=false;active=true;rendering=true;departing=false;padHeld='';padFrames=0;announce();},
   leave(){active=false;departing=true;},
   close(){active=false;rendering=false;departing=false;},input,choose,
-  setCount(players){explicitCount=true;count=normalizeCount(players,entry().mode);if(entry().mode.startsWith('online-'))count=Math.max(2,count);if(active)announce();},
+  setCount(players){if(['solo','worlds'].includes(page))return;explicitCount=true;count=normalizeCount(players,entry().mode);if(entry().mode.startsWith('online-'))count=Math.max(2,count);if(active)announce();},
   setSave(available){hasSave=Boolean(available);if(active)announce();},
   pointer(y){if(!active||y<FIRST_Y||y>=FIRST_Y+rows().length*rowHeight())return;selected=Math.floor((y-FIRST_Y)/rowHeight());selectedRow();if(entry().mode.startsWith('online-'))count=Math.max(2,count);announce();choose();},
-  get active(){return active;},get selected(){return selected;},get count(){return count;},get state(){return snapshot();}
+  get active(){return active;},get selected(){return selected;},get count(){return currentCount();},get state(){return snapshot();}
  };
 }

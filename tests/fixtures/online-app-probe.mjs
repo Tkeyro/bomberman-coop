@@ -7,6 +7,8 @@ import {createLobbyHandler} from '../../server/lobby.js';
 
 const root=new URL('../../',import.meta.url),html=fs.readFileSync(new URL('dist/index.html',root),'utf8');
 const bytes=fs.readFileSync(process.env.BOMBERMAN_TEST_ROM),flush=()=>new Promise(resolve=>setImmediate(resolve));
+const scenario=process.env.BOMBERMAN_ONLINE_APP_SCENARIO??'';
+assert.ok(['','audio-hang','pause-delay','ack-timeout'].includes(scenario),'known online app scenario');
 const same=(a,b)=>assert.deepEqual(JSON.parse(JSON.stringify(a)),JSON.parse(JSON.stringify(b)));
 function colorButton(app,color,group='room-color-options'){
  const buttons=app.e.get(group).children;assert.equal(buttons.length,8,`${group} offers all eight colors`);
@@ -27,10 +29,11 @@ class D1SQLite{
 }
 const db=new D1SQLite(),handler=createLobbyHandler();const requests=[];
 async function fetchLobby(path,options){requests.push({path,method:options.method,body:options.body});return handler(new Request(new URL(path,'https://game.test/'),options),{DB:db});}
-const peers=new Map(),channels=[];let peerSerial=0;
+const peers=new Map(),channels=[];let peerSerial=0,delayPauseRequest=false,droppedLoaded=0;
+const pendingPauseRequests=[];
 class Channel extends EventTarget{
  constructor(label){super();this.label=label;this.readyState='connecting';this.bufferedAmount=0;this.sent=[];channels.push(this);}
- send(data){assert.equal(this.readyState,'open');this.sent.push(data);this.bufferedAmount+=Buffer.byteLength(data);queueMicrotask(()=>{if(this.remote.readyState==='open')this.remote.onmessage?.({data});this.bufferedAmount=0;this.dispatchEvent(new Event('bufferedamountlow'));});}
+ send(data){assert.equal(this.readyState,'open');this.sent.push(data);this.bufferedAmount+=Buffer.byteLength(data);const packet=JSON.parse(data);if(scenario==='ack-timeout'&&packet.type==='loaded'){droppedLoaded++;this.bufferedAmount=0;return;}const deliver=()=>{if(this.remote.readyState==='open')this.remote.onmessage?.({data});this.bufferedAmount=0;this.dispatchEvent(new Event('bufferedamountlow'));};if(delayPauseRequest&&packet.type==='pause-request')pendingPauseRequests.push(deliver);else queueMicrotask(deliver);}
  close(){if(this.readyState==='closed')return;this.readyState='closed';this.onclose?.();this.remote?.close();}
 }
 class Peer{
@@ -51,9 +54,17 @@ async function app(name,id,color,gameMode='campaign'){
  for(const [,id]of html.matchAll(/id="([^"]+)"/g))elements.set(id,element());
  elements.get('color-select').value=color;elements.get('player-count-select').value='2';elements.get('room-name').value=name;
  const window={listeners:{},addEventListener(type,fn){this.listeners[type]=fn;}};
+ class AudioContext{
+  constructor(){this.sampleRate=name==='Guest'?48000:44100;this.state='suspended';this.destination={};this.suspendCalls=0;this.unsettledCalls=0;}
+  createScriptProcessor(){return {connect(){}};}
+  createGain(){return {gain:{value:1},connect(){}};}
+  suspend(){this.state='suspended';this.suspendCalls++;if((name==='Tkeyro'&&this.suspendCalls===3)||(name==='Guest'&&this.suspendCalls===2)){this.unsettledCalls++;return new Promise(()=>{});}return Promise.resolve();}
+  resume(){this.state='running';return Promise.resolve();}
+ }
+ if(scenario==='audio-hang')window.AudioContext=AudioContext;
  class LocalURL extends URL{static createObjectURL(blob){exported=blob;return 'blob:test';}static revokeObjectURL(){}}
  const storage=new Map([['bomberman-player-id',id]]);
- const context=vm.createContext({console,document,window,Blob,Response,Request,Headers,CompressionStream,DecompressionStream,TextEncoder,TextDecoder,structuredClone,crypto:webcrypto,fetch:fetchLobby,RTCPeerConnection:Peer,URL:LocalURL,location:{href:'https://game.test/'},navigator:{},Event,EventTarget,atob,btoa,queueMicrotask,indexedDB:undefined,performance:{now:()=>clock},localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},requestAnimationFrame:fn=>{nextFrame=fn;},setTimeout:(fn,ms)=>{const id=++timerID;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)});
+ const context=vm.createContext({console,document,window,...(scenario==='audio-hang'?{AudioContext}:{}),Blob,Response,Request,Headers,CompressionStream,DecompressionStream,TextEncoder,TextDecoder,structuredClone,crypto:webcrypto,fetch:fetchLobby,RTCPeerConnection:Peer,URL:LocalURL,location:{href:'https://game.test/'},navigator:{},Event,EventTarget,atob,btoa,queueMicrotask,indexedDB:undefined,performance:{now:()=>clock},localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},requestAnimationFrame:fn=>{nextFrame=fn;},setTimeout:(fn,ms)=>{const id=++timerID;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)});
  async function module(url){const key=url.href;if(modules.has(key))return modules.get(key);const result=new vm.SourceTextModule(fs.readFileSync(url,'utf8'),{context,identifier:key,initializeImportMeta:meta=>{meta.url=key;}});modules.set(key,result);return result;}
  async function load(path){const result=await module(new URL(path,root));if(result.status==='unlinked')await result.link((specifier,parent)=>module(new URL(specifier,parent.identifier)));if(result.status==='linked')await result.evaluate();return result.namespace;}
  const vendor=await load('dist/vendor/pce.js'),setCanvas=vendor.PCE.prototype.SetCanvas;vendor.PCE.prototype.SetCanvas=function(id){machine=this;return setCanvas.call(this,id);};
@@ -88,7 +99,42 @@ await changingColor;await flush();await host.poll();await guest.poll();
 assertColorUI(guest,'yellow');assert.equal(guest.e.get('room-ready').textContent,'Ready');assert.equal(host.e.get('room-start').disabled,true);
 for(const a of [host,guest]){assert.equal(a.e.get('room-list').children[1].children[0].title,'yellow');assert.equal(a.e.get('room-list').children[1].children[2].textContent,'Choosing');}
 await colorButton(guest,'orange').click();await flush();await guest.e.get('room-ready').click();await negotiate();assertColorUI(guest,'orange');
+if(scenario==='ack-timeout'){
+ await host.e.get('room-start').click();for(let n=0;n<700&&guest.e.get('online-room-dialog').open;n++){host.tick();await flush();if(host.e.get('pause-btn').textContent==='Resume')await new Promise(resolve=>setTimeout(resolve,5));}
+ assert.equal(guest.e.get('online-room-dialog').open,false,'guest received and applied the host snapshot');assert.equal(droppedLoaded,1,'guest acknowledgement is lost');
+ const watchdog=[...host.timers].find(([,t])=>t.ms===45000);assert.ok(watchdog,'startup waiting has a bounded watchdog');host.timers.delete(watchdog[0]);await watchdog[1].fn();await flush();
+ assert.match(host.status(),/Online startup timed out/);assert.match(guest.status(),/Online startup timed out/);
+ const frames=[host,guest].map(a=>a.e.get('frame-count').textContent);
+ await host.e.get('pause-btn').click();await guest.e.get('pause-btn').click();await flush();
+ for(let n=0;n<3;n++){host.tick();guest.tick();await flush();}
+ assert.deepEqual([host,guest].map(a=>a.e.get('frame-count').textContent),frames,'Resume cannot run a game whose startup handshake failed');
+ assert.match(host.status(),/synchronization did not complete/);assert.match(guest.status(),/synchronization did not complete/);
+ assert.equal(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='frames')),false,'no authority frames are emitted before everyone has loaded');
+ await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
+ process.stdout.write(JSON.stringify({scenario,startupTimeout:true,blockedResume:true,droppedLoaded}));
+}else{
 await synchronize();await advance(5);assertColorUI(host,'black',{disabled:true});assertColorUI(guest,'orange',{disabled:true});
+if(scenario){
+ let delayedFrames=0;
+ if(scenario==='pause-delay'){
+  delayPauseRequest=true;await guest.e.get('pause-btn').click();await flush();
+  assert.equal(pendingPauseRequests.length,1,'guest pause request is delayed in transit');
+  const before=host.machine._onlineCampaign.state.frame;
+  for(let n=0;n<3;n++){host.tick();await flush();guest.tick();await flush();}
+  delayedFrames=host.machine._onlineCampaign.state.frame-before;assert.ok(delayedFrames>=3,'host emits authoritative frames before receiving the pause request');
+  delayPauseRequest=false;for(const deliver of pendingPauseRequests.splice(0))deliver();await flush();
+  assert.equal(host.e.get('pause-btn').textContent,'Resume');assert.equal(guest.e.get('pause-btn').textContent,'Resume');
+  await host.e.get('pause-btn').click();await flush();
+ }
+ // Survive the first periodic checksum after startup/resume. The guest may
+ // consume buffered frames faster than the host to recover the delayed pause.
+ for(let n=0;n<145;n++){host.tick();await flush();guest.tick();await flush();if(scenario==='pause-delay'){guest.tick();await flush();}assert.doesNotMatch(host.status()+guest.status(),/Emulation stopped|states differ|frame order|desynchronization/);}
+ same(host.machine.RAM,guest.machine.RAM);assert.equal(host.machine.PC,guest.machine.PC);
+ if(scenario==='audio-hang')for(const a of [host,guest]){assert.equal(a.machine.WebAudioCtx.unsettledCalls,1,'an unresolved audio suspend request does not hold the gameplay handshake');assert.ok(a.machine.WebAudioCtx.suspendCalls>=2);}
+ assert.ok(host.machine._onlineCampaign.state.frame>=120,'authoritative gameplay progresses past its first checksum');
+ await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
+ process.stdout.write(JSON.stringify({scenario,frames:host.machine._onlineCampaign.state.frame,delayedFrames,unsettledAudio:scenario==='audio-hang'}));
+}else{
 assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='transfer-chunk')),'host serialized snapshot travels over chunked RTC');assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='loaded')),'guest acknowledges applied snapshot');
 assert.equal(host.machine._onlineCampaign.state.enabled,true);assert.equal(guest.machine._onlineCampaign.state.enabled,true);same(host.machine.RAM,guest.machine.RAM);
 const initial=await host.export();await flush();assert.equal(initial.session.mode,'online-campaign');assert.deepEqual(Array.from(initial.session.onlineRoom.players,p=>p.color),['black','orange']);assert.equal(initial.session.companions.bots.length,2);
@@ -127,3 +173,5 @@ same(bh.machine.RAM,bg.machine.RAM);assert.equal(bh.machine.PC,bg.machine.PC);co
 assert.ok(channels.some(c=>c.sent.some(s=>{const p=JSON.parse(s);return p.type==='input'&&p.mask===8;})),'physical guest controller is sent through the network mask');
 await bh.e.get('room-leave').click();await bg.e.get('room-leave').click();db.sqlite.close();
 process.stdout.write(JSON.stringify({players:2,sharedUpgrades:true,cameraViews:true,restartLevel:'4-4',remoteReleased:true,battleControllers:true,frames:saved.session.onlineCampaign.frame,httpRequests:requests.length}));
+}
+}

@@ -57,6 +57,19 @@ export function blastCells(p,x,y,range=p.RAM[0x84d]&127) {
  }
  return cells;
 }
+// A covered exit (kind 4) is a wall that must be opened. Once exposed (kind
+// 8), striking it summons more monsters. Include bomb chains and each bomb's
+// placement-time range, while retaining native terrain stops.
+export function blastThreatensExit(p,x,y,range=p.RAM[0x84d]&127,active=bombs(p),exits=null) {
+ const pending=[{x,y,range}],triggered=new Set();
+ for(let i=0;i<pending.length;i++){
+  const b=pending[i],area=blastCells(p,b.x,b.y,b.range);
+  if(exits){for(const cell of exits)if(area.has(cell))return true;}
+  else for(const cell of area){const [cx,cy]=cell.split(',').map(Number);if(tileKind(p,cx,cy)===8)return true;}
+  for(const chained of active)if(!triggered.has(chained.slot)&&area.has(key(chained.x,chained.y))){triggered.add(chained.slot);pending.push(chained);}
+ }
+ return false;
+}
 export function dangerCells(p) {
  const danger=new Set();
  for(const b of bombs(p)) for(const cell of blastCells(p,b.x,b.y,b.range)) danger.add(cell);
@@ -303,7 +316,9 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
   if((p.RAM[0x43a]&7)||p.RAM[0x437]){state.active=false;return;}
   state.active=true;
   state.steps++;
-  const danger=dangerCells(p),foes=enemies(p),predicted=foreseeMonsters(p,foes,state),monsterDanger=monsterCells(p,predicted),allDanger=new Set([...danger,...monsterDanger]),attackZones=new Map(),timedTargets=detonationTargets(p,foes,state.foeMotion),nowBombs=bombs(p),claims=new Map(),wantedBlasts=[];
+  const danger=dangerCells(p),foes=enemies(p),predicted=foreseeMonsters(p,foes,state),monsterDanger=monsterCells(p,predicted),allDanger=new Set([...danger,...monsterDanger]),attackZones=new Map(),timedTargets=detonationTargets(p,foes,state.foeMotion),nowBombs=bombs(p),claims=new Map(),wantedBlasts=[],portalSafety=new Map(),exits=new Set();
+  for(let y=1;y<(p.RAM[0x435]||12);y++)for(let x=2;x<(p.RAM[0x434]||15);x++)if(tileKind(p,x,y)===8)exits.add(key(x,y));
+  function portalSafe(x,y,range){if(!exits.size)return true;const cell=`${x},${y},${range}`;if(!portalSafety.has(cell))portalSafety.set(cell,!blastThreatensExit(p,x,y,range,nowBombs,exits));return portalSafety.get(cell);}
   const requirement=p._levelObjective?.state,required=!foes.length&&p._levelObjective?.canExit()===false,requiredWall=required&&requirement.phase==='barrier',requiredCell=requiredWall?key(requirement.x,requirement.y):null;
   function release(bot){if(bot.goal&&claims.get(goalKey(bot.goal))===bot.id)claims.delete(goalKey(bot.goal));bot.goal=null;}
   function claimable(bot,kind,cell){const owner=claims.get(goalKey({kind,...cell}));return owner===undefined||owner===bot.id;}
@@ -330,13 +345,13 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
    const start={x:tx,y:ty},centered=Math.abs(bot.x-(tx*16+8))<.01&&Math.abs(bot.y-(ty*16+8))<.01;
    const visible=pickups(p).filter(beneficialPickup),available=required&&requirement.phase==='item'?visible.filter(i=>i.slot===requirement.slot):visible,item=available.find(i=>i.x===tx&&i.y===ty);
    if(centered&&item&&!allDanger.has(key(tx,ty))&&collect(bot,item)){release(bot);continue;}
-   if(bot.remote)for(const [index,slot]of companionBombSlots(bot).entries())if(p.RAM[0x84f+slot]&128&&p.RAM[0x917+slot]===255&&p.RAM[0x8ef+slot]!==0){bot.remoteTimers[index]=Math.min(1000000,bot.remoteTimers[index]+1);const area=blastCells(p,p.RAM[0x877+slot],p.RAM[0x89f+slot],state.bombRanges[slot]||bot.fireRange),person=getHuman(),friends=[...state.bots.filter(b=>b.alive),...(person?[person]:[])];p.RAM[0x8ef+slot]=bot.remoteTimers[index]>=12&&friends.every(b=>!area.has(key(Math.floor(b.x/16),Math.floor(b.y/16)))&&(!b.target||!area.has(key(b.target.x,b.target.y))))&&!pickups(p).some(i=>area.has(key(i.x,i.y)))?1:150;}
+   if(bot.remote)for(const [index,slot]of companionBombSlots(bot).entries())if(p.RAM[0x84f+slot]&128&&p.RAM[0x917+slot]===255&&p.RAM[0x8ef+slot]!==0){bot.remoteTimers[index]=Math.min(1000000,bot.remoteTimers[index]+1);const x=p.RAM[0x877+slot],y=p.RAM[0x89f+slot],range=state.bombRanges[slot]||bot.fireRange,area=blastCells(p,x,y,range),person=getHuman(),friends=[...state.bots.filter(b=>b.alive),...(person?[person]:[])];p.RAM[0x8ef+slot]=bot.remoteTimers[index]>=12&&portalSafe(x,y,range)&&friends.every(b=>!area.has(key(Math.floor(b.x/16),Math.floor(b.y/16)))&&(!b.target||!area.has(key(b.target.x,b.target.y))))&&!pickups(p).some(i=>area.has(key(i.x,i.y)))?1:150;}
    const overlapping=friends(bot).some(friend=>feet(bot,friend)>0),incoming=state.bots.some(friend=>friend.alive&&friend!==bot&&friend.target?.x===tx&&friend.target?.y===ty),blastRequest=wantedBlasts.find(area=>area.has(key(tx,ty)));
    if(!allDanger.has(key(tx,ty))&&(overlapping||(!bot.target&&(incoming||blastRequest)))){const avoid=blastRequest??new Set(),route=yieldRoute(bot,allDanger,avoid);if(route.length){release(bot);bot.route=route;bot.target=bot.route.shift();bot.yieldFrames=45;bot.action='Yielding to a teammate';}}
    const pickupCells=new Set(available.map(i=>key(i.x,i.y)));let pickupRoute=centered&&!bot.yieldFrames&&!allDanger.has(key(tx,ty))?goalRoute(bot,start,'item',n=>pickupCells.has(key(n.x,n.y)),{danger:allDanger}):null;
    if(pickupRoute?.length){bot.route=pickupRoute;bot.target=bot.route.shift();bot.action='Collecting power-ups';}
    const barrierRoute=requiredWall&&centered&&!bot.yieldFrames&&!allDanger.has(key(tx,ty))?goalRoute(bot,start,'barrier',n=>{
-    if(tileKind(p,n.x,n.y)!==10)return false;const area=blastCells(p,n.x,n.y,bot.fireRange);if(!area.has(requiredCell))return false;
+    if(tileKind(p,n.x,n.y)!==10||!portalSafe(n.x,n.y,bot.fireRange))return false;const area=blastCells(p,n.x,n.y,bot.fireRange);if(!area.has(requiredCell))return false;
     if(!teamBlastClear(bot,area))return false;
     const proposed=new Set([...allDanger,...area]);return Boolean(teamPath(bot,n,c=>!proposed.has(key(c.x,c.y)),{allowDanger:true,blocked:allDanger,maxSteps:Math.max(5,bot.fireRange+1)},false)?.length);
    },{danger:allDanger}):null;
@@ -348,13 +363,13 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
    const attackZone=attackZones.get(bot.fireRange),blast=blastCells(p,tx,ty,bot.fireRange),enemyApproach=attackZone.has(key(tx,ty))&&(bot.remote||[...timedTargets].some(cell=>blast.has(cell))),protectsPickup=pickups(p).some(i=>blast.has(key(i.x,i.y)));
    const nearBlocks=n=>NEIGHBORS.map(([dx,dy])=>({x:n.x+dx,y:n.y+dy})).filter(cell=>[2,3,4].includes(tileKind(p,cell.x,cell.y))&&claimable(bot,'block',cell));
    const clearing=(requiredWall&&blast.has(requiredCell))||nearBlocks(start).length>0,useful=clearing||enemyApproach;
-   if(centered&&!bot.yieldFrames&&!pickupRoute?.length&&!protectsPickup&&useful&&!bot.cooldown&&!danger.has(key(tx,ty))&&monsterClearance(foes,bot.x,bot.y)>=16&&!nowBombs.some(b=>b.x===tx&&b.y===ty)){
+   if(centered&&!bot.yieldFrames&&!pickupRoute?.length&&!protectsPickup&&useful&&!bot.cooldown&&portalSafe(tx,ty,bot.fireRange)&&!danger.has(key(tx,ty))&&monsterClearance(foes,bot.x,bot.y)>=16&&!nowBombs.some(b=>b.x===tx&&b.y===ty)){
     const ownsTask=requiredWall&&blast.has(requiredCell)?claim(bot,'barrier',start):enemyApproach?claim(bot,'enemy',start):nearBlocks(start).some(cell=>claim(bot,'block',cell));
     const proposed=new Set([...allDanger,...blast]),escape=teamPath(bot,start,n=>!proposed.has(key(n.x,n.y)),{allowDanger:true,blocked:allDanger,maxSteps:Math.max(5,bot.fireRange+1)},false);
     if(ownsTask&&!teamBlastClear(bot,blast))wantedBlasts.push(blast);
     if(ownsTask&&escape?.length&&teamBlastClear(bot,blast)){
      const slots=companionBombSlots(bot);
-     try{if(slots.filter(i=>p.RAM[0x84f+i]).length>=bot.bombCapacity)throw new Error('Own bombs are still active');const slot=spawnBomb(p,tx,ty,{slots,automatic:true});state.bombRanges[slot]=bot.fireRange;bot.remoteTimers[slot-slots[0]]=0;bot.bombsPlaced++;bot.cooldown=60;bot.route=escape;bot.target=bot.route.shift();release(bot);bot.action='Bombing and escaping';for(const cell of blast)danger.add(cell);for(const cell of blast)allDanger.add(cell);nowBombs.push({x:tx,y:ty});record(bot,'Placed original-engine bomb');continue;}catch{}
+     try{if(slots.filter(i=>p.RAM[0x84f+i]).length>=bot.bombCapacity)throw new Error('Own bombs are still active');const slot=spawnBomb(p,tx,ty,{slots,automatic:true});state.bombRanges[slot]=bot.fireRange;bot.remoteTimers[slot-slots[0]]=0;bot.bombsPlaced++;bot.cooldown=60;bot.route=escape;bot.target=bot.route.shift();release(bot);bot.action='Bombing and escaping';for(const cell of blast)danger.add(cell);for(const cell of blast)allDanger.add(cell);nowBombs.push({slot,x:tx,y:ty,range:bot.fireRange});portalSafety.clear();record(bot,'Placed original-engine bomb');continue;}catch{}
     }
    }
    if(danger.has(key(tx,ty))||monsterClearance(predicted,bot.x,bot.y)<32||(bot.target&&monsterDanger.has(key(bot.target.x,bot.target.y)))){
@@ -386,10 +401,10 @@ export function createCompanions(p,{colorize,getHuman=()=>playerPosition(p)}={})
     if(p._spectator?.enabled){p.RAM[0x43d]=bot.x&255;p.RAM[0x43e]=bot.x>>8;p.RAM[0x43f]=bot.y&255;p.RAM[0x440]=bot.y>>8;}
     p.RAM[0x437]=1;record(bot,'Reached the exit; shared stage clear requested');
    }bot.action='Finding the exit';continue;}
-   if(attackZone.has(key(tx,ty))&&!enemyApproach&&!clearing){bot.action='Waiting for an intercept';continue;}
+   if(attackZone.has(key(tx,ty))&&!enemyApproach&&!clearing&&portalSafe(tx,ty,bot.fireRange)){bot.action='Waiting for an intercept';continue;}
    
-   const hunting=goalRoute(bot,start,'enemy',n=>(n.x!==tx||n.y!==ty)&&attackZone.has(key(n.x,n.y))&&teamBlastClear(bot,blastCells(p,n.x,n.y,bot.fireRange)),{danger:allDanger});
-   const blockGoal=n=>{const cells=nearBlocks(n);return (n.x!==tx||n.y!==ty)&&cells.length&&(!bot.goal||bot.goal.kind!=='block'||cells.some(cell=>cell.x===bot.goal.x&&cell.y===bot.goal.y))&&teamBlastClear(bot,blastCells(p,n.x,n.y,bot.fireRange));};
+   const hunting=goalRoute(bot,start,'enemy',n=>(n.x!==tx||n.y!==ty)&&attackZone.has(key(n.x,n.y))&&portalSafe(n.x,n.y,bot.fireRange)&&teamBlastClear(bot,blastCells(p,n.x,n.y,bot.fireRange)),{danger:allDanger});
+   const blockGoal=n=>{const cells=nearBlocks(n);return (n.x!==tx||n.y!==ty)&&cells.length&&(!bot.goal||bot.goal.kind!=='block'||cells.some(cell=>cell.x===bot.goal.x&&cell.y===bot.goal.y))&&portalSafe(n.x,n.y,bot.fireRange)&&teamBlastClear(bot,blastCells(p,n.x,n.y,bot.fireRange));};
    let objective=hunting;
    if(!objective){objective=teamPath(bot,start,blockGoal,{danger:allDanger});if(!objective&&bot.goal?.kind==='block'){release(bot);objective=teamPath(bot,start,blockGoal,{danger:allDanger});}if(objective?.length){const cell=nearBlocks(objective.at(-1))[0];claim(bot,'block',cell);}else if(bot.goal?.kind==='block')release(bot);}
    const route=objective?.length?objective:null;

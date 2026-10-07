@@ -40,10 +40,13 @@ test('native five-row menu, world picker and AI/ONLINE pages preserve native gam
  menu.setSave(true);menu.input('UP');render();checkLabel('LOAD SAVE',186);menu.input('RUN');assert.deepEqual(chosen,{mode:'load',options:{count:2}});
  const redAt=y=>{let n=0;for(let yy=y;yy<y+16;yy++)for(let x=46;x<60;x++){const at=(yy*width+x)*4;if(p.ImageData.data[at]>200&&p.ImageData.data[at+1]<60&&p.ImageData.data[at+2]<60)n++;}return n;};
  assert.ok(redAt(186)>0,'fifth row has the original red cursor');assert.equal(redAt(130),0);
- menu.input('DOWN');chosen=null;menu.input('RUN');assert.equal(menu.state.page,'worlds');assert.equal(chosen,null,'opening the picker does not launch yet');render();
+ menu.input('DOWN');chosen=null;menu.input('RUN');assert.equal(menu.state.page,'solo');assert.equal(chosen,null,'opening the controller submenu does not launch yet');render();checkLabel('HUMAN',130);checkLabel('AI',144);
+ menu.input('RUN');assert.equal(menu.state.page,'worlds');assert.equal(chosen,null,'opening the picker does not launch yet');render();
  for(let world=0;world<8;world++)checkLabel(`${world+1}-0`,130+world*11);
  for(let n=0;n<7;n++)menu.input('DOWN');assert.equal(menu.state.world,7);menu.input('RUN');assert.deepEqual(chosen,{mode:'solo',options:{count:1,world:7}});
- menu.input('SHOT2');assert.equal(menu.state.page,'main');assert.equal(menu.selected,0,'Button II restores the parent choice');
+ menu.input('SHOT2');assert.equal(menu.state.page,'solo');assert.equal(menu.selected,0,'Button II restores the Human choice');
+ menu.input('DOWN');assert.equal(menu.count,-1);menu.input('RUN');assert.equal(menu.state.page,'worlds');menu.input('DOWN');menu.input('RUN');assert.deepEqual(chosen,{mode:'solo',options:{count:-1,world:1}},'single-player AI watches one autonomous bot in the selected native world');
+ menu.input('BACK');assert.equal(menu.state.page,'solo');assert.equal(menu.selected,1,'Back restores the AI choice');menu.input('BACK');assert.equal(menu.state.page,'main');assert.equal(menu.selected,0,'the nested submenu then returns to the main Campaign choice');
  menu.input('DOWN');menu.input('LEFT');assert.equal(menu.count,1);menu.input('RUN');assert.deepEqual(chosen,{mode:'new',options:{count:1}});
  for(let n=0;n<4;n++)menu.input('RIGHT');assert.equal(menu.count,5);
  for(const bots of [1,2,3,4]){menu.input('RIGHT');assert.equal(menu.count,-bots);}render();checkLabel('WATCH: 4 AI  LEFT/RIGHT',218,false);menu.input('RUN');assert.deepEqual(chosen,{mode:'new',options:{count:-4}});
@@ -51,8 +54,22 @@ test('native five-row menu, world picker and AI/ONLINE pages preserve native gam
  menu.input('DOWN');assert.equal(menu.count,2,'online rooms cannot inherit AI-only counts');menu.input('RUN');assert.deepEqual(chosen,{mode:'online-campaign',options:{count:2}});
  menu.setCount(-3);assert.equal(menu.count,2);for(let n=0;n<3;n++)menu.input('RIGHT');assert.equal(menu.count,5);menu.input('LEFT');assert.equal(menu.count,4);
  menu.input('BACK');assert.equal(menu.selected,2);menu.input('DOWN');menu.input('RUN');assert.equal(menu.state.page,'battle');menu.input('RUN');assert.deepEqual(chosen,{mode:'battle-ai',options:{count:4}});menu.input('DOWN');menu.input('RUN');assert.deepEqual(chosen,{mode:'online-battle',options:{count:4}});
- menu.input('BACK');menu.pointer(130);assert.equal(menu.state.page,'worlds');menu.pointer(130+3*11);assert.deepEqual(chosen,{mode:'solo',options:{count:1,world:3}});menu.input('BACK');menu.pointer(186);assert.deepEqual(chosen,{mode:'load',options:{count:4}});
+ menu.input('BACK');menu.pointer(130);assert.equal(menu.state.page,'solo');menu.pointer(130);assert.equal(menu.state.page,'worlds');menu.pointer(130+3*11);assert.deepEqual(chosen,{mode:'solo',options:{count:1,world:3}});menu.input('BACK');menu.input('BACK');menu.pointer(186);assert.deepEqual(chosen,{mode:'load',options:{count:4}});
  menu.close();render();assert.deepEqual(p.RAM,reference.RAM);assert.deepEqual(p.ImageData.data,reference.ImageData.data,'closing restores the original title rendering');
+});
+test('idle main/controller/world menus never enter the native attract demo',{skip:!rom},()=>{
+ const p=createMachine(fs.readFileSync(rom)),reference=createMachine(fs.readFileSync(rom)),menu=installNativeMenu(p);title(p);title(reference);menu.open(2);
+ // The original timer has 1075 frames left at this point. Wait through several
+ // full native demo timeouts on each nested page; title artwork stays loaded.
+ for(const page of ['main','solo','worlds']){
+  if(page!=='main')menu.input('RUN');
+  const artwork=p.VDC[0].VRAM.slice(0x4000,0x6000),models=p.VDC[0].VRAM.slice(0x7000,0x8000);
+  frames(p,2401);assert.equal(menu.active,true);assert.equal(menu.state.page,page);assert.equal(p.VDC[0].SATB[2],918,'the native title cursor remains loaded');
+  assert.deepEqual(p.VDC[0].VRAM.slice(0x4000,0x6000),artwork);assert.deepEqual(p.VDC[0].VRAM.slice(0x7000,0x8000),models,'demo suppression never replaces native models');
+  assert.ok(p.RAM[0x13b8]|p.RAM[0x13b9]<<8,'the title countdown stays live');
+ }
+ frames(reference,1500);assert.notEqual(reference.VDC[0].SATB[2],918,'an unmodified ROM has entered its native demo');
+ menu.close();frames(p,1500);assert.notEqual(p.VDC[0].SATB[2],918,'closing the custom menu restores native behavior');
 });
 test('the replacement menu covers every startup title frame before controls unlock',{skip:!rom},()=>{
  const p=createMachine(fs.readFileSync(rom)),menu=installNativeMenu(p);menu.prepare(4);let menuLines=0,oldInk=0;const sprite=p.MakeSpriteLine;
