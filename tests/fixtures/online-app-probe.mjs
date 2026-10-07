@@ -93,9 +93,10 @@ async function app(name,id,color,gameMode='campaign',players=2,{rom=true}={}){
  const storage=new Map([['bomberman-player-id',id]]);
  const context=vm.createContext({console,document,window,...(audioEnabled?{AudioContext}:{}),MediaStream,Blob,Response,Request,Headers,CompressionStream,DecompressionStream,TextEncoder,TextDecoder,structuredClone,crypto:webcrypto,fetch:fetchLobby,RTCPeerConnection:Peer,URL:LocalURL,location:{href:'https://game.test/'},navigator:{},Event,EventTarget,atob,btoa,queueMicrotask,indexedDB:undefined,performance:{now:()=>clock},localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},requestAnimationFrame:fn=>{nextFrame=fn;},setTimeout:(fn,ms)=>{const id=++timerID;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)});
  async function module(url){const key=url.href;if(modules.has(key))return modules.get(key);let source=fs.readFileSync(url,'utf8');
-  // Retain the real controller for presentation-preference assertions. This
+  // Retain the real controllers for state and presentation assertions. This
   // fixture-only exposure changes no CPU, rendering, state or input behavior.
   if(key.endsWith('/dist/campaign.js')){const marker='return {state,add,update,respawnForStage,setBombColors';assert.ok(source.includes(marker));source=source.replace(marker,'return p._fixtureCompanions={state,add,update,respawnForStage,setBombColors');}
+  if(key.endsWith('/dist/admin-levels.js')){const marker='return {state,jumpOriginal';assert.ok(source.includes(marker));source=source.replace(marker,'return p._fixtureAdminLevels={state,jumpOriginal');}
   const result=new vm.SourceTextModule(source,{context,identifier:key,initializeImportMeta:meta=>{meta.url=key;}});modules.set(key,result);return result;}
  async function load(path){const result=await module(new URL(path,root));if(result.status==='unlinked')await result.link((specifier,parent)=>module(new URL(specifier,parent.identifier)));if(result.status==='linked')await result.evaluate();return result.namespace;}
  const vendor=await load('dist/vendor/pce.js'),setCanvas=vendor.PCE.prototype.SetCanvas;vendor.PCE.prototype.SetCanvas=function(id){machine=this;return setCanvas.call(this,id);};
@@ -144,13 +145,25 @@ async function join(){
 }
 async function synchronize(){await host.e.get('room-start').click();for(let n=0;n<700;n++){host.tick();await flush();if(host.e.get('pause-btn').textContent==='Resume')await new Promise(resolve=>setTimeout(resolve,5));if(guest.e.get('online-room-dialog').open===false&&guest.e.get('pause-btn').textContent==='Pause')return;}assert.fail(host.status()+' / '+guest.status()+JSON.stringify({frame:host.e.get('frame-count').textContent,campaign:host.machine._onlineCampaign.state,stage:host.machine.RAM.slice(0x84a,0x84c),packets:channels.map(c=>c.sent.slice(-3).map(s=>JSON.parse(s).type))}));}
 async function advance(count){for(let i=0;i<count;i++){host.tick();await flush();guest.tick();await flush();if(third){third.tick();await flush();}assert.doesNotMatch(host.status()+guest.status(),/Emulation stopped|out of sync|frame order|different roster/);}}
+async function humansMoveAfterTravel({stream=false}={}){
+ const p=host.machine,campaign=await host.load('dist/campaign.js');
+ for(const [index,app]of [host,guest].entries()){
+  const actor=p._fixtureCompanions.state.bots.find(actor=>actor.id===p._onlineCampaign.state.roster[index].id);assert.ok(actor?.alive,'the arriving human can play');
+  const x=Math.floor(actor.x/16),y=Math.floor(actor.y/16),direction=[[1,0,'ArrowRight'],[0,1,'ArrowDown'],[-1,0,'ArrowLeft'],[0,-1,'ArrowUp']].find(([dx,dy])=>campaign.tileKind(p,x+dx,y+dy)===10);assert.ok(direction,'the stage entrance gives the arriving human an open corridor');
+  const before={x:actor.x,y:actor.y};app.e.get(stream&&index===1?'stream-video':'game-canvas').focus();await app.key(direction[2]);await advance(3);await app.key(direction[2],true);await advance(1);
+  assert.ok(Math.abs(actor.x-before.x)+Math.abs(actor.y-before.y)>.5,`${index?'guest':'host'} keyboard input moves its own actor after native level loading`);
+ }
+ if(!stream){same(p.RAM,guest.machine.RAM);same(p._fixtureCompanions.state,guest.machine._fixtureCompanions.state);}
+}
 async function hostAdminEdits({stream=false}={}){
  const p=host.machine,campaign=await host.load('dist/campaign.js'),members=p._onlineCampaign.state.roster.map(r=>r.id),humans=()=>p._fixtureCompanions.state.bots.filter(actor=>members.includes(actor.id)).map(actor=>({id:actor.id,x:actor.x,y:actor.y,alive:actor.alive}));
  const before={room:host.e.get('room-code').value,stage:Array.from(p.RAM.slice(0x84a,0x84c)),lives:p.RAM[0x438],humans:humans()};
  assert.equal(guest.e.get('admin-btn').disabled,true,'only the multiplayer host owns the admin button');
  const guestTools=guest.e.get('spawn-tool').textContent;
- await guest.key('F2');await guest.e.get('admin-btn').click();await guest.e.get('item-grid').children[0].click();await guest.e.get('spawn-bot').click();
+ await guest.key('F2');await guest.e.get('admin-btn').click();await guest.e.get('item-grid').children[0].click();await guest.e.get('spawn-bot').click();await guest.e.get('spawn-bomb').click();guest.e.get('admin-world').value='4';guest.e.get('admin-area').value='3';await guest.e.get('admin-go-level').click();
  assert.equal(guest.e.get('admin-dialog').open,false,'guest hotkeys and programmatic buttons cannot open admin');assert.equal(guest.e.get('spawn-tool').textContent,guestTools,'guest programmatic tools cannot start placement');
+ same(p.RAM.slice(0x84a,0x84c),before.stage);assert.equal(p._fixtureAdminLevels.state.pending,false,'a guest cannot queue a host level jump');
+ if(!stream)assert.equal(guest.machine._fixtureAdminLevels.state.pending,false,'a guest cannot queue a local level jump');
  assert.equal(host.e.get('admin-btn').disabled,false);await guest.key('KeyD');await host.key('F2');assert.equal(host.e.get('admin-dialog').open,true,'host F2 opens the multiplayer inventory');
  await guest.key('KeyD',true);
  for(const app of [host,guest])assert.equal(app.e.get('pause-btn').textContent,'Resume','opening the host inventory pauses everyone');
@@ -177,13 +190,42 @@ async function hostAdminEdits({stream=false}={}){
  // without silently starting the round. Resume remains the host's choice.
  await host.e.get('pause-btn').click();await flush();await host.key('F2');assert.equal(host.e.get('admin-dialog').open,true);
  await host.e.get('item-grid').children[0].click();await tile(26,15);
+ assert.equal(campaign.bombs(p).filter(bomb=>bomb.slot<10).length,0,'the separate native admin bank starts empty');
+ await host.e.get('spawn-bomb').click();for(let x=8;x<22;x++)await tile(x,17);
+ assert.equal(campaign.bombs(p).filter(bomb=>bomb.slot<10).length,10,'the first ten admin bombs use the original native slots');assert.equal(p._adminBombs.state.pending.length,4,'further placements wait without a numeric brush cap');
+ assert.equal(host.e.get('spawn-bomb').attributes['aria-pressed'],'true','queued overflow keeps the Bomb brush selected');assert.match(host.e.get('admin-bomb-queue').textContent,/4 bomb placements queued/);
+ for(const pending of p._adminBombs.state.pending){const button=host.e.get('admin-map').children.find(tile=>tile.title===`Tile ${pending.x}, ${pending.y}`);assert.ok(button.className.includes('queued'));assert.equal(button.disabled,true,'a queued tile rejects a duplicate placement');}
+ const bombQueue=JSON.parse(JSON.stringify(p._adminBombs.state)),queuedSave=await host.export();same(queuedSave.session.adminBombs,bombQueue);assert.equal(queuedSave.session.adminLevels.pending,false,'an idle level controller is saved alongside the pending bombs');
  const pausedNative={ram:Array.from(p.RAM),pc:p.PC,humans:humans()};await host.e.get('admin-close').click();await flush();
  if(!stream)for(let n=0;n<120&&!/Admin changes synchronized/.test(host.status()+guest.status());n++){await advance(1);await new Promise(resolve=>setTimeout(resolve,5));}
  for(const app of [host,guest])assert.equal(app.e.get('pause-btn').textContent,'Resume','admin opened from Pause keeps the existing round paused');
  same(p.RAM,pausedNative.ram);assert.equal(p.PC,pausedNative.pc);same(humans(),pausedNative.humans);
- if(!stream){assert.match(host.status(),/Admin changes synchronized/);same(p.RAM,guest.machine.RAM);same(p._bossSpawns.state,guest.machine._bossSpawns.state);}
+ if(!stream){assert.match(host.status(),/Admin changes synchronized/);same(p.RAM,guest.machine.RAM);same(p._bossSpawns.state,guest.machine._bossSpawns.state);same(p._adminBombs.state,guest.machine._adminBombs.state);same(p._adminBombs.state,bombQueue);}
  await host.e.get('pause-btn').click();await flush();for(const app of [host,guest])assert.equal(app.e.get('pause-btn').textContent,'Pause','the host can resume after paused admin edits');
  return true;
+}
+async function hostAdminLevelJump({stream=false}={}){
+ const p=host.machine,team=()=>p._fixtureCompanions.state.bots.map(actor=>Object.fromEntries(['id','color','bombBank','bombCapacity','fireRange','speedUp','remote','bombPass','wallPass','extraLives'].map(key=>[key,actor[key]])));
+ const before={room:host.e.get('room-code').value,lives:p.RAM[0x438],team:team(),shared:JSON.parse(JSON.stringify(p._sharedPowerups.state)),roster:JSON.parse(JSON.stringify(p._onlineCampaign.state.roster))};
+ await host.e.get('pause-btn').click();await flush();await host.key('F2');assert.equal(host.e.get('admin-dialog').open,true);
+ host.e.get('admin-world').value='4';host.e.get('admin-area').value='3';await host.e.get('admin-go-level').click();await flush();
+ assert.equal(host.e.get('admin-dialog').open,false,'Go to level accepts the selection and closes the paused admin console');
+ assert.equal(p._fixtureAdminLevels.state.pending,true);same(p._fixtureAdminLevels.state.target,{kind:'original',world:4,area:3});assert.ok((p.RAM[0x43a]&7)||p.RAM[0x437],'level selection requests the original ROM stage loader');
+ assert.equal(p._adminBombs.state.pending.length,0,'a requested level discards queued bombs from the old map');
+ if(!stream)for(let n=0;n<120&&!/Admin changes synchronized/.test(host.status()+guest.status());n++){await advance(1);await new Promise(resolve=>setTimeout(resolve,5));}
+ for(const app of [host,guest])assert.equal(app.e.get('pause-btn').textContent,'Resume','selecting a level from Pause keeps its native transition paused until Resume');
+ if(!stream){same(p.RAM,guest.machine.RAM);same(p._fixtureAdminLevels.state,guest.machine._fixtureAdminLevels.state);same(p._adminBombs.state,guest.machine._adminBombs.state);}
+ const pending=await host.export();same(pending.session.adminLevels,p._fixtureAdminLevels.state);assert.equal(pending.session.adminLevels.pending,true,'a save includes the unfinished native level jump');same(pending.session.adminBombs,p._adminBombs.state);
+ await host.e.get('pause-btn').click();await flush();
+ for(let n=0;n<700&&p._fixtureAdminLevels.state.pending;n++)await advance(1);
+ assert.equal(p._fixtureAdminLevels.state.pending,false,'the native loader completes the requested world and area');assert.equal(p.RAM[0x84a],4);assert.equal(p.RAM[0x84b],3);assert.equal(p.RAM[0x43a]&7,0);assert.equal(p.RAM[0x437],0);
+ assert.equal(p.RAM[0x438],before.lives,'admin travel costs no life');same(team(),before.team);same(p._sharedPowerups.state,before.shared);same(p._onlineCampaign.state.roster,before.roster);
+ assert.ok(p._fixtureCompanions.state.bots.filter(actor=>actor.alive).every(actor=>actor.x<150&&actor.y<150),'living teammates arrive through the safe stage entrance');
+ assert.equal(host.e.get('room-code').value,before.room);assert.equal(guest.e.get('room-code').value,before.room);
+ if(stream){assert.equal(guest.machine,undefined,'a streamed level jump still runs only the host emulator');assert.equal(guest.e.get('stream-video').srcObject.getVideoTracks()[0].readyState,'live','level travel keeps the same live media connection');}
+ else{same(p.RAM,guest.machine.RAM);same(p._fixtureCompanions.state,guest.machine._fixtureCompanions.state);same(p._fixtureAdminLevels.state,guest.machine._fixtureAdminLevels.state);assert.equal(p.PC,guest.machine.PC,'both computers arrive with the same native CPU state');}
+ await humansMoveAfterTravel({stream});
+ return pending;
 }
 await join();
 if(scenario==='player-departure'){third=await app('Third','third-player-0001','blue');third.e.get('room-code').value=host.e.get('room-code').value;await third.e.get('join-room').click();await third.e.get('room-ready').click();await negotiate();assert.equal(host.e.get('room-list').children.length,3);}
@@ -274,6 +316,7 @@ if(scenario==='host-stream'){
  assert.equal(host.machine.RAM[0x84f+repeated.slot],0,'a second press of X detonates the next bomb');
  assert.ok(channels.some(c=>c.sent.some(data=>{const packet=JSON.parse(data);return packet.type==='input'&&packet.mask===32;})),'guest X crosses the data channel as Button II');
  await hostAdminEdits({stream:true});
+ await hostAdminLevelJump({stream:true});
  const frame=host.machine._onlineCampaign.state.frame;
  for(let n=0;n<50;n++){host.tick();await flush();}
  assert.ok(host.machine._onlineCampaign.state.frame-frame>100,'host streaming advances without guest simulation acknowledgements or callbacks');
@@ -508,12 +551,21 @@ await host.e.get('pause-btn').click();await flush();const paused=host.e.get('fra
 await host.e.get('room-leave').click();await guest.e.get('room-leave').click();await flush();
 // Import the exported checkpoint, retaining original player IDs/upgrades but
 // requesting world4 stage4, then exercise the actual fresh-level boot path.
-saved.state.RAM[0x84a]=3;saved.state.RAM[0x84b]=3;saved.session.onlineRoom.revision='0.4.7';delete saved.session.companions.bombColors;delete saved.session.bosses;const saveModule=await host.load('dist/save-state.js'),checkpoint=await saveModule.encodeSave(saved);
+saved.state.RAM[0x84a]=3;saved.state.RAM[0x84b]=3;saved.session.onlineRoom.revision='0.4.7';delete saved.session.companions.bombColors;delete saved.session.bosses;delete saved.session.adminBombs;delete saved.session.adminLevels;const saveModule=await host.load('dist/save-state.js'),checkpoint=await saveModule.encodeSave(saved);
 await host.e.get('save-input').listeners.change({target:{files:[checkpoint],value:'x'}});assert.match(host.e.get('save-status').textContent,/Online save selected/);assert.match(host.e.get('room-checkpoint').textContent,/level 4-4/);
 assertColorUI(host,'black');
 await guest.e.get('open-menu-btn').click();for(let i=0;i<110;i++)guest.tick();await guest.key('ArrowDown');await guest.key('ArrowDown');await guest.key('Enter');await guest.key('ArrowDown');await guest.key('Enter');await join();await synchronize();await advance(3);
 assert.equal(host.machine.RAM[0x84a],3);assert.equal(host.machine.RAM[0x84b],3);same(host.machine.RAM,guest.machine.RAM);const resumed=await host.export();assert.deepEqual(resumed.session.onlineRoom.players.map(p=>p.id),saved.session.onlineRoom.players.map(p=>p.id));assert.ok(resumed.session.companions.bots.every(b=>b.bombCapacity===2));assert.ok(resumed.session.companions.bots.every(b=>b.x<100&&b.y<100),'saved remote positions restart from the level entrance');
 assertColorUI(host,'black',{disabled:true});assertColorUI(guest,'orange',{disabled:true});
+const pendingAdminSave=await hostAdminLevelJump();
+await host.e.get('room-leave').click();await guest.e.get('room-leave').click();
+// A save made before the selected level loads must restart that target when
+// an online team recreates its lobby, rather than restarting the old RAM stage.
+assert.equal(pendingAdminSave.session.adminLevels.pending,true);assert.equal(pendingAdminSave.state.RAM[0x84a],3,'the pending save still contains the old world in native RAM');
+const pendingCheckpoint=await saveModule.encodeSave(pendingAdminSave);await host.e.get('save-input').listeners.change({target:{files:[pendingCheckpoint],value:'x'}});assert.match(host.e.get('save-status').textContent,/Online save selected/);assert.match(host.e.get('room-checkpoint').textContent,/level 5-4/,'the lobby checkpoint uses the requested world 5, area index 3');
+await guest.e.get('open-menu-btn').click();for(let i=0;i<110;i++)guest.tick();await guest.key('ArrowDown');await guest.key('ArrowDown');await guest.key('Enter');await guest.key('ArrowDown');await guest.key('Enter');await join();await synchronize();await advance(3);
+assert.equal(host.machine.RAM[0x84a],4);assert.equal(host.machine.RAM[0x84b],3);same(host.machine.RAM,guest.machine.RAM);const targetResume=await host.export();same(targetResume.session.onlineRoom.players,pendingAdminSave.session.onlineRoom.players);assert.equal(targetResume.session.sharedPowerups.counts[1],pendingAdminSave.session.sharedPowerups.counts[1]);assert.ok(targetResume.session.companions.bots.every(actor=>actor.bombCapacity===2),'a pending travel save restarts its target with saved team powers');assert.equal(targetResume.session.adminLevels.pending,false,'fresh online loading consumes the pending travel request');
+await humansMoveAfterTravel();
 await host.e.get('room-leave').click();await guest.e.get('room-leave').click();
 // Original Battle must also use only synchronized native controller inputs.
 // A guest's physical controller is assigned to their network slot, and cannot

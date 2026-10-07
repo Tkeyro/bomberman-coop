@@ -1,6 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';
+import {isCampaign} from '../dist/campaign.js';
 // Mocked DOM integration checks placement behavior, not browser layout or audio.
-test('admin selection is a persistent placement tool with toggle, deselect and safe errors',{skip:!process.env.BOMBERMAN_TEST_ROM},async()=>{
+test('admin brushes retain selection and solo level travel preserves lives and upgrades',{skip:!process.env.BOMBERMAN_TEST_ROM},async()=>{
  const html=fs.readFileSync(new URL('../dist/index.html',import.meta.url),'utf8'),elements=new Map();
  const element=()=>({value:'',disabled:true,hidden:false,open:false,listeners:{},children:[],style:{},attributes:{},
   addEventListener(name,fn){this.listeners[name]=fn;},setAttribute(name,value){this.attributes[name]=value;},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];this.textContent='';},
@@ -19,7 +20,7 @@ test('admin selection is a persistent placement tool with toggle, deselect and s
   await import('../dist/app.js');const bytes=fs.readFileSync(process.env.BOMBERMAN_TEST_ROM);
   await elements.get('rom-input').listeners.change({target:{files:[{size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)}]}});
   const tick=()=>{clock+=50;nextFrame(clock);},key=async code=>{window.listeners.keydown({code,preventDefault(){}});await new Promise(resolve=>setImmediate(resolve));};
-  for(let n=0;n<110;n++)tick();assert.match(elements.get('menu-status').textContent,/1P - CAMPAIGN/);await key('Enter');assert.match(elements.get('menu-status').textContent,/1-0/);await key('Enter');await key('Space');window.listeners.keyup({code:'Space',preventDefault(){}});
+  for(let n=0;n<110;n++)tick();assert.match(elements.get('menu-status').textContent,/1P - CAMPAIGN/);await key('Enter');assert.match(elements.get('menu-status').textContent,/HUMAN/);await key('Enter');assert.match(elements.get('menu-status').textContent,/1-0/);await key('Enter');await key('Space');window.listeners.keyup({code:'Space',preventDefault(){}});
   for(let n=0;n<400&&!/Game ready/.test(elements.get('load-status').textContent);n++)tick();assert.match(elements.get('load-status').textContent,/Game ready/);assert.equal(machine._newCampaign.enabled,false);
   await key('F2');assert.equal(elements.get('admin-dialog').open,true);assert.equal(elements.get('pause-btn').textContent,'Resume');
   const frameBefore=elements.get('frame-count').textContent;tick();assert.equal(elements.get('frame-count').textContent,frameBefore,'placement pauses emulation');
@@ -40,6 +41,10 @@ test('admin selection is a persistent placement tool with toggle, deselect and s
   for(let i=0;i<25;i++)machine.RAM[0xf9b+i]=savedFlags[i];await tile(4).click();assert.equal(itemAt(4).flag&31,1,'the same tool works again after capacity is available');
   await elements.get('admin-close').click();assert.equal(elements.get('admin-dialog').open,false);assert.equal(elements.get('pause-btn').textContent,'Pause');assert.equal(item(1).attributes['aria-pressed'],'false','closing admin clears the placement tool');
   const resumed=Number(elements.get('frame-count').textContent);tick();assert.ok(Number(elements.get('frame-count').textContent)>resumed,'closing admin resumes the running game');
-  await key('F2');assert.equal(elements.get('admin-dialog').open,true);assert.equal(item(1).attributes['aria-pressed'],'false');const reopened=flags();await tile(5).click();assert.deepEqual(flags(),reopened,'reopening the admin panel starts with no active tool');await elements.get('admin-close').click();
+  await key('F2');assert.equal(elements.get('admin-dialog').open,true);assert.equal(item(1).attributes['aria-pressed'],'false');const reopened=flags();await tile(5).click();assert.deepEqual(flags(),reopened,'reopening the admin panel starts with no active tool');
+  const powers=()=>[machine.RAM[0x438],machine.RAM[0x84c],machine.RAM[0x84d],machine.RAM[0x84e],machine.RAM[0x43a]&240],beforeTravel=powers();
+  elements.get('admin-world').value='4';elements.get('admin-area').value='3';await elements.get('admin-go-level').click();assert.equal(elements.get('admin-dialog').open,false,'a solo host accepts a level selection through the actual admin button');assert.equal(elements.get('pause-btn').textContent,'Pause');assert.ok((machine.RAM[0x43a]&7)||machine.RAM[0x437],'Go to level requests an original native stage loader');
+  for(let n=0;n<700&&(machine.RAM[0x84a]!==4||machine.RAM[0x84b]!==3||machine.RAM[0x437]||(machine.RAM[0x43a]&7)||!isCampaign(machine));n++)tick();
+  assert.equal(machine.RAM[0x84a],4);assert.equal(machine.RAM[0x84b],3);assert.equal(machine.RAM[0x437],0);assert.equal(machine.RAM[0x43a]&7,0);assert.deepEqual(powers(),beforeTravel,'changing levels preserves the solo life and permanent upgrade inventory');
  }finally{PCE.prototype.SetCanvas=setCanvas;for(const [key,value]of originals){if(value===undefined)delete globalThis[key];else globalThis[key]=value;}}
 });
