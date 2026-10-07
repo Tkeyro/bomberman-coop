@@ -1,5 +1,5 @@
 import {COLORS,ROM_SHA256} from './session.js';
-export const ONLINE_REVISION='0.4.6';
+export const ONLINE_REVISION='0.4.7';
 const MAX_TRANSFER=16*1024*1024,CHUNK=8192;
 export function stablePlayerID(storage=globalThis.localStorage){
  let id;try{id=storage?.getItem('bomberman-player-id');}catch{}
@@ -8,8 +8,8 @@ export function stablePlayerID(storage=globalThis.localStorage){
 }
 // Lobby records/signaling travel over HTTP. Only the peers receive game state;
 // the game file is never sent to the server or to another browser.
-export function createOnlineRoom({playerId=stablePlayerID(),fetch:request=globalThis.fetch,Peer=globalThis.RTCPeerConnection,
- onRoom=()=>{},onData=()=>{},onReady=()=>{},onDisconnected=()=>{},onError=()=>{},onStatus=()=>{},timer=setTimeout,cancel=clearTimeout}={}){
+export function createOnlineRoom({playerId=stablePlayerID(),fetch:request=globalThis.fetch,Peer=globalThis.RTCPeerConnection,Stream=globalThis.MediaStream,
+ getHostStream=()=>null,onMedia=()=>{},onRoom=()=>{},onData=()=>{},onReady=()=>{},onDisconnected=()=>{},onError=()=>{},onStatus=()=>{},timer=setTimeout,cancel=clearTimeout}={}){
  let room=null,token=null,pollTimer=null,after=0,closed=false,polling=false,heartbeat=0,generation=0,pollFailures=0;
  const peers=new Map(),transfers=new Map();
  const isHost=()=>room?.hostId===playerId;
@@ -52,7 +52,24 @@ export function createOnlineRoom({playerId=stablePlayerID(),fetch:request=global
  async function peerFor(id,offer=false){
   if(peers.has(id))return peers.get(id);
   if(!Peer)throw new Error('This browser does not support WebRTC online play.');
-  const pc=new Peer({iceServers:[{urls:'stun:stun.l.google.com:19302'}]}),peer={pc,channel:null,candidates:[]};peers.set(id,peer);
+  let stream=null,tracks=[];
+  if(offer&&isHost()&&room.transport==='stream'){
+   try{stream=getHostStream();tracks=stream?.getTracks?.().filter(track=>['video','audio'].includes(track.kind)&&track.readyState!=='ended')??[];}catch{throw new Error('The host game stream could not be captured. Return to the lobby and try again.');}
+   if(!tracks.some(track=>track.kind==='video'))throw new Error('Host streaming needs a live game video track. Return to the lobby and try again.');
+  }
+  const pc=new Peer({iceServers:[{urls:'stun:stun.l.google.com:19302'}]}),peer={pc,channel:null,candidates:[],senders:[],media:null};peers.set(id,peer);
+  const current=()=>!closed&&peers.get(id)===peer;
+  pc.ontrack=event=>{
+   if(!current()||isHost()||room?.transport!=='stream'||id!==room.hostId)return;
+   try{
+    if(!event.track||!['video','audio'].includes(event.track.kind)||event.track.readyState==='ended')return;
+    if(!peer.media)peer.media=Stream?new Stream():event.streams?.[0];
+    if(!peer.media?.getTracks||!peer.media?.addTrack)throw new Error('This browser cannot receive the host game stream.');
+    const incoming=[...(event.streams??[]).flatMap(value=>value.getTracks?.()??[]),event.track];
+    for(const track of incoming)if(['video','audio'].includes(track.kind)&&track.readyState!=='ended'&&!peer.media.getTracks().includes(track))peer.media.addTrack(track);
+    Promise.resolve(onMedia(peer.media,id)).catch(error=>{if(current())onError(error);});
+   }catch(error){if(current())onError(error);}
+  };
   pc.onicecandidate=e=>{if(e.candidate&&!closed&&peers.get(id)===peer)signal(id,'ice',e.candidate.toJSON?.()??e.candidate).catch(error=>{
    if(closed||peers.get(id)!==peer)return;
    // Once the data channel works, an optional late ICE candidate cannot make
@@ -61,18 +78,30 @@ export function createOnlineRoom({playerId=stablePlayerID(),fetch:request=global
   });};
   pc.onconnectionstatechange=()=>{if(!closed&&peers.get(id)===peer&&['failed','disconnected'].includes(pc.connectionState)){onDisconnected(id);onError(new Error('Connection lost. Gameplay is paused; return to the lobby to reconnect. Some networks require a TURN relay.'));}};
   pc.ondatachannel=e=>{if(!closed&&peers.get(id)===peer)channelFor(id,e.channel);};
-  if(offer){channelFor(id,pc.createDataChannel('bomberman',{ordered:true}));await pc.setLocalDescription(await pc.createOffer());await signal(id,'offer',pc.localDescription);}
+  if(offer){
+   if(stream){
+    try{if(typeof pc.addTrack!=='function')throw new Error();for(const track of tracks)peer.senders.push(pc.addTrack(track,stream));}
+    catch{peers.delete(id);pc.close();throw new Error('This browser cannot send the host game stream. Choose synchronized play or another browser.');}
+   }
+   channelFor(id,pc.createDataChannel('bomberman',{ordered:true}));const description=await pc.createOffer();if(!current())return peer;await pc.setLocalDescription(description);if(current())await signal(id,'offer',pc.localDescription);
+  }
   return peer;
+ }
+ async function limitVideo(peer){
+  // These optional encoding limits do not renegotiate or change game state.
+  for(const sender of peer.senders)if(sender?.track?.kind==='video'&&sender.getParameters&&sender.setParameters){
+   try{const parameters=sender.getParameters();if(!parameters.encodings?.length)continue;for(const encoding of parameters.encodings){encoding.maxBitrate=2500000;encoding.maxFramerate=60;}await sender.setParameters(parameters);}catch{}
+  }
  }
  async function handleSignal(s){
   if(s.to!==playerId||!room.players.some(p=>p.id===s.from)||(!isHost()&&s.from!==room.hostId))return;
   if(!['offer','answer','ice'].includes(s.type)||!s.data||typeof s.data!=='object')throw new Error('Invalid player connection signal.');
-  const peer=await peerFor(s.from),pc=peer.pc;
+  const peer=await peerFor(s.from),pc=peer.pc,current=()=>!closed&&peers.get(s.from)===peer;if(!current())return;
   if(s.type==='offer'){
-   if(isHost())return;await pc.setRemoteDescription(s.data);for(const c of peer.candidates)await pc.addIceCandidate(c);peer.candidates=[];
-   await pc.setLocalDescription(await pc.createAnswer());await signal(s.from,'answer',pc.localDescription);
+   if(isHost())return;await pc.setRemoteDescription(s.data);if(!current())return;for(const c of peer.candidates){await pc.addIceCandidate(c);if(!current())return;}peer.candidates=[];
+   const description=await pc.createAnswer();if(!current())return;await pc.setLocalDescription(description);if(current())await signal(s.from,'answer',pc.localDescription);
   }else if(s.type==='answer'){
-   if(!isHost())return;await pc.setRemoteDescription(s.data);for(const c of peer.candidates)await pc.addIceCandidate(c);peer.candidates=[];
+   if(!isHost())return;await pc.setRemoteDescription(s.data);if(!current())return;for(const c of peer.candidates){await pc.addIceCandidate(c);if(!current())return;}peer.candidates=[];await limitVideo(peer);
   }else if(s.type==='ice'){if(pc.remoteDescription)await pc.addIceCandidate(s.data);else peer.candidates.push(s.data);}
  }
  async function poll(){
@@ -84,9 +113,9 @@ export function createOnlineRoom({playerId=stablePlayerID(),fetch:request=global
     (data.room.hostId!==null&&typeof data.room.hostId!=='string')||!Array.isArray(data.signals)||!Number.isSafeInteger(data.lastId)||data.lastId<after||
     data.signals.some(s=>!s||!Number.isSafeInteger(s.id)||s.id<=after||s.id>data.lastId||typeof s.to!=='string'||typeof s.from!=='string'))throw new Error('The lobby service returned invalid room data.');
    room=data.room;
-   for(const s of data.signals??[]){if(closed||current!==generation)return;await handleSignal(s);}after=data.lastId??after;
+   for(const s of data.signals??[]){if(closed||current!==generation)return;await handleSignal(s);}if(closed||current!==generation)return;after=data.lastId??after;
    for(const [id,peer]of peers)if(!room.players.some(p=>p.id===id)){peers.delete(id);peer.pc.close();onDisconnected(id);}
-   if(isHost())for(const p of room.players)if(p.id!==playerId&&p.connected!==false)await peerFor(p.id,true);
+   if(isHost())for(const p of room.players)if(p.id!==playerId&&p.connected!==false){await peerFor(p.id,true);if(closed||current!==generation)return;}
    if(++heartbeat%10===0)await backgroundApi('/'+room.code+'/heartbeat','POST',{});if(pollFailures){pollFailures=0;onStatus('',{retrying:false,attempts:0});}announce();
   }catch(error){if(!closed&&current===generation){if(error.pollRetryable)serviceWarning();else onError(error);}}finally{if(current===generation){polling=false;if(!closed&&room)pollTimer=timer(poll,Math.min(8000,1000*2**Math.min(pollFailures,3)));}}
  }

@@ -1,5 +1,6 @@
 // Lobby records and WebRTC signaling only. ROM bytes and emulator saves stay local.
 const COLORS = new Set(['original', 'black', 'blue', 'green', 'red', 'violet', 'orange', 'yellow']);
+const TRANSPORTS = new Set(['sync', 'stream']);
 const ID = /^[A-Za-z0-9_-]{16,64}$/;
 const HASH = /^[a-f0-9]{64}$/i;
 const CODE = /^[A-Z2-9]{10}$/;
@@ -109,7 +110,7 @@ async function roomResult(db, room, now) {
   const players = await all(db, 'SELECT * FROM bm_members WHERE room_code = ? ORDER BY joined_at, rowid', [room.code]);
   return {
     code: room.code, hostId: players.find(player => player.id === room.host_member_id)?.player_id ?? null,
-    mode: room.mode, world: room.world, slots: room.slots, revision: room.patch_revision,
+    mode: room.mode, transport: room.transport, world: room.world, slots: room.slots, revision: room.patch_revision,
     romHash: room.rom_hash, status: room.status, generation: room.generation,
     players: players.map(player => publicPlayer(player, room, now)),
     checkpoint: room.checkpoint_json ? JSON.parse(room.checkpoint_json) : null,
@@ -182,12 +183,14 @@ export function createLobbyHandler({ now = () => Date.now() } = {}) {
       if (!code) {
         if (request.method !== 'POST') fail(405, 'Use POST to create a lobby.');
         const body = await bodyJSON(request);
-        keys(body, ['name', 'color', 'playerId', 'revision', 'romHash', 'mode', 'world', 'slots', 'checkpoint']);
+        keys(body, ['name', 'color', 'playerId', 'revision', 'romHash', 'mode', 'transport', 'world', 'slots', 'checkpoint']);
         const player = identity(body);
         if (!['campaign', 'battle'].includes(body.mode)) fail(400, 'Unknown game mode.');
+        const transport = body.transport === undefined ? 'sync' : body.transport;
+        if (!TRANSPORTS.has(transport)) fail(400, 'Unknown online transport.');
         const world = integer(body.world ?? 0, 'world', 0, 7);
         const slots = integer(body.slots ?? 5, 'player limit', 2, 5);
-        const room = { code: roomCode(), host_member_id: randomHex(16), mode: body.mode, world, slots, patch_revision: player.revision, rom_hash: player.romHash, status: 'lobby', generation: 0, created_at: timestamp, expires_at: timestamp + ROOM_LIFETIME, checkpoint_json: null, start_id: null, started_at: null };
+        const room = { code: roomCode(), host_member_id: randomHex(16), mode: body.mode, transport, world, slots, patch_revision: player.revision, rom_hash: player.romHash, status: 'lobby', generation: 0, created_at: timestamp, expires_at: timestamp + ROOM_LIFETIME, checkpoint_json: null, start_id: null, started_at: null };
         if (body.checkpoint !== undefined && body.checkpoint !== null) {
           const saved = validateCheckpoint(body.checkpoint, room);
           if (!saved.players.some(savedPlayer => savedPlayer.id === player.id)) fail(409, 'The host must belong to the saved player roster.');
@@ -197,7 +200,7 @@ export function createLobbyHandler({ now = () => Date.now() } = {}) {
         const token = randomHex(32);
         await db.batch([
           statement(db, 'DELETE FROM bm_rooms WHERE code IN (SELECT code FROM bm_rooms WHERE expires_at <= ? ORDER BY expires_at LIMIT 100)', [timestamp]),
-          statement(db, 'INSERT INTO bm_rooms (code,host_member_id,mode,world,slots,patch_revision,rom_hash,status,generation,created_at,expires_at,checkpoint_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)', [room.code, room.host_member_id, room.mode, room.world, slots, player.revision, player.romHash, 'lobby', 0, timestamp, room.expires_at, room.checkpoint_json]),
+          statement(db, 'INSERT INTO bm_rooms (code,host_member_id,mode,transport,world,slots,patch_revision,rom_hash,status,generation,created_at,expires_at,checkpoint_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [room.code, room.host_member_id, room.mode, room.transport, room.world, slots, player.revision, player.romHash, 'lobby', 0, timestamp, room.expires_at, room.checkpoint_json]),
           statement(db, 'INSERT INTO bm_members (id,room_code,player_id,name,color,ready,token_hash,joined_at,last_seen) VALUES (?,?,?,?,?,?,?,?,?)', [room.host_member_id, room.code, player.id, player.name, player.color, 1, await tokenHash(token), timestamp, timestamp]),
         ]);
         return response({ room: await roomResult(db, room, timestamp), token, playerId: player.id }, 201);

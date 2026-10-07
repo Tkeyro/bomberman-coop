@@ -4,7 +4,8 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
 // Two isolated JavaScript/DOM realms run the unchanged app against a real
-// SQLite lobby and a mocked ordered RTC transport. This is not browser QA.
+// SQLite lobby and a mocked ordered RTC transport. Media delivery is also
+// mocked; this verifies app wiring, not browser encoding or live-network delay.
 async function probe(scenario=''){
  const fixture=fileURLToPath(new URL('./fixtures/online-app-probe.mjs',import.meta.url));
  const child=spawn(process.execPath,['--experimental-vm-modules',fixture],{env:{...process.env,BOMBERMAN_ONLINE_APP_SCENARIO:scenario},stdio:['ignore','pipe','pipe']});
@@ -34,6 +35,10 @@ test('departing third player invalidates the original roster for both remaining 
  const result=await probe('player-departure');assert.equal(result.remainingPlayers,2);assert.equal(result.blockedResume,true);assert.equal(result.fatalReason,true);
 });
 
-test('online campaign ends after native game over when the whole team has no lives',{skip:!process.env.BOMBERMAN_TEST_ROM,timeout:90000},async()=>{
- const result=await probe('online-gameover');assert.equal(result.survivorContinues,true);assert.equal(result.finiteLives,true);assert.equal(result.nativeSequence,true);assert.equal(result.synchronizedEnd,true);assert.equal(result.usableMenus,true);assert.equal(result.pausedEndingRecovery,true);
+test('zero-life online campaign offers a host choice to restart its world or quit after the native ending',{skip:!process.env.BOMBERMAN_TEST_ROM,timeout:150000},async()=>{
+ const result=await probe('online-gameover');assert.equal(result.survivorContinues,true);assert.equal(result.finiteLives,true);assert.equal(result.nativeSequence,true);assert.equal(result.synchronizedEnd,true);assert.equal(result.worldContinue,true);assert.equal(result.repeatedPrompt,true);assert.equal(result.usableMenus,true);assert.equal(result.pausedEndingRecovery,true);
+});
+
+test('host streaming runs only the host emulator while a guest without a ROM receives media and controls its own actor',{skip:!process.env.BOMBERMAN_TEST_ROM,timeout:150000},async()=>{
+ const result=await probe('host-stream');assert.equal(result.noGuestEmulator,true);assert.equal(result.videoAudio,true);assert.equal(result.remoteControls,true);assert.equal(result.noSimulationBackpressure,true);assert.equal(result.worldContinue,true);assert.equal(result.cleanQuit,true);
 });

@@ -5,6 +5,12 @@ import {ROM_SHA256} from '../dist/session.js';
 
 const flush=async()=>{for(let i=0;i<20;i++)await Promise.resolve();};
 const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});return {promise,resolve};};
+class FakeStream{
+ constructor(tracks=[]){this.tracks=[...tracks];}
+ getTracks(){return [...this.tracks];}
+ addTrack(track){if(!this.tracks.includes(track))this.tracks.push(track);}
+}
+const mediaTrack=kind=>({kind,readyState:'live',stops:0,stop(){this.stops++;this.readyState='ended';}});
 function clock(){
  const pending=new Map();let serial=0;
  return {pending,timer(fn,ms){const id=++serial;pending.set(id,{fn,ms});return id;},cancel(id){pending.delete(id);},
@@ -18,7 +24,7 @@ function lobby(){
   calls.push({url,method,headers:{...options.headers},body});const path=new URL(url,'https://test.invalid').pathname;
   const failureIndex=failures.findIndex(f=>f.method===method&&path.endsWith(f.suffix));if(failureIndex>=0){const failure=failures.splice(failureIndex,1)[0];if(failure.error)throw failure.error;if(failure.jsonError)return {ok:failure.status<400,status:failure.status,json:async()=>{throw new SyntaxError('truncated response');}};return response(failure.status,failure.data??{error:'Temporary lobby service problem.'});}
   if(path==='/api/rooms'&&method==='POST'){
-   const id=body.playerId,token=`token-${id}`;tokens.set(token,id);room={code:'ABC123',hostId:id,players:[{id,name:body.name,color:body.color,connected:true}],phase:'lobby'};return response(201,{room,token});
+   const id=body.playerId,token=`token-${id}`;tokens.set(token,id);room={code:'ABC123',hostId:id,transport:body.transport??'sync',players:[{id,name:body.name,color:body.color,connected:true}],phase:'lobby'};return response(201,{room,token});
   }
   if(path==='/api/rooms/ABC123/join'&&method==='POST'){
    if(!room)return response(404,{error:'Room not found.'});const id=body.playerId,token=`token-${id}`;tokens.set(token,id);
@@ -51,9 +57,10 @@ function peerNetwork(){
   close(){if(this.readyState==='closed')return;this.readyState='closed';this.onclose?.();if(this.remote?.readyState!=='closed')this.remote?.close();}
  }
  class Peer{
-  constructor(config){this.id=`peer-${++serial}`;this.config=config;this.localDescription=null;this.remoteDescription=null;this.candidates=[];this.connectionState='new';peers.set(this.id,this);}
+  constructor(config){this.id=`peer-${++serial}`;this.config=config;this.localDescription=null;this.remoteDescription=null;this.candidates=[];this.connectionState='new';this.senders=[];peers.set(this.id,this);}
+  addTrack(track,stream){assert.equal(this.localDescription,null,'media tracks are attached before the initial offer');const sender={track,stream,parameters:null,getParameters:()=>({encodings:[{}]}),async setParameters(value){sender.parameters=value;}};this.senders.push(sender);return sender;}
   createDataChannel(label,options){assert.equal(options.ordered,true);return this.channel=new Channel(label);}
-  async createOffer(){await Promise.resolve();return {type:'offer',sdp:this.id};}
+  async createOffer(){this.offeredTracks=this.senders.map(sender=>sender.track);await Promise.resolve();return {type:'offer',sdp:this.id};}
   async createAnswer(){await Promise.resolve();return {type:'answer',sdp:this.id};}
   async setLocalDescription(description){await Promise.resolve();this.localDescription=description;
    queueMicrotask(()=>{if(this.connectionState!=='closed')this.onicecandidate?.({candidate:{candidate:`ice:${this.id}`,toJSON(){return {candidate:this.candidate};}}});});this.connect();
@@ -63,6 +70,7 @@ function peerNetwork(){
   connect(){const remote=peers.get(this.remoteDescription?.sdp);if(!remote||!this.localDescription||!remote.localDescription||!this.candidates.length||!remote.candidates.length)return;
    const host=this.channel?this:remote,guest=host===this?remote:this;if(host.channel.remote)return;
    const receive=new Channel(host.channel.label);host.channel.remote=receive;receive.remote=host.channel;guest.channel=receive;guest.ondatachannel?.({channel:receive});
+   for(const sender of host.senders)guest.ontrack?.({track:sender.track,streams:[sender.stream]});
    for(const p of [host,guest])p.connectionState='connected';for(const c of [host.channel,receive]){c.readyState='open';queueMicrotask(()=>c.onopen?.());}
   }
   close(){this.connectionState='closed';this.channel?.close();}
@@ -94,10 +102,10 @@ function entryServer({holdEntries=true,holdLeaves=false}={}){
 }
 function fixture(t){
  const service=lobby(),network=peerNetwork(),members=[];
- function member(id){const events={rooms:[],ready:[],data:[],errors:[],disconnected:[],status:[]},time=clock();
-  const client=createOnlineRoom({playerId:id,fetch:service.fetch,Peer:network.Peer,timer:time.timer,cancel:time.cancel,
+ function member(id,options={}){const events={rooms:[],ready:[],data:[],media:[],errors:[],disconnected:[],status:[]},time=clock();
+  const client=createOnlineRoom({playerId:id,fetch:service.fetch,Peer:network.Peer,Stream:FakeStream,timer:time.timer,cancel:time.cancel,...options,
    onRoom:(room,status)=>events.rooms.push({room:structuredClone(room),status}),onReady:room=>events.ready.push(structuredClone(room)),
-   onData:(packet,from)=>events.data.push({packet,from}),onError:error=>events.errors.push(error),onDisconnected:id=>events.disconnected.push(id),onStatus:(message,status)=>events.status.push({message,...status})});
+   onData:(packet,from)=>events.data.push({packet,from}),onMedia:(stream,from)=>events.media.push({stream,from,tracks:stream.getTracks()}),onError:error=>events.errors.push(error),onDisconnected:id=>events.disconnected.push(id),onStatus:(message,status)=>events.status.push({message,...status})});
   const result={id,client,events,time};members.push(result);return result;
  }
  t.after(async()=>{for(const m of members)await m.client.leave();await flush();});
@@ -131,6 +139,47 @@ test('two peers negotiate asynchronous offer, answer and early ICE with authenti
 test('host readiness waits for all room members rather than one connected guest',async t=>{
  const f=fixture(t),{host}=await f.pair(),third=f.member('third-player-0001');await third.client.join('ABC123',{name:'Third',color:'red'});await host.client.poll();assert.equal(host.client.connected(),false);
  const before=f.calls.length;await assert.rejects(host.client.start(),/every player.*connect/i);assert.equal(f.calls.length,before,'incomplete rooms cannot request a start');await f.settle();assert.equal(host.client.connected(),true);assert.equal(third.client.connected(),true);await host.client.start();
+});
+test('host streaming negotiates video and audio in the initial offer while controls stay on the ordered channel',async t=>{
+ const f=fixture(t),video=mediaTrack('video'),audio=mediaTrack('audio'),stream=new FakeStream([video,audio]);
+ const host=f.member('host-player-00001',{getHostStream:()=>stream}),guest=f.member('guest-player-0001'),third=f.member('third-player-0001');
+ await host.client.create({name:'Host',color:'black',transport:'stream'});await guest.client.join('ABC123',{name:'Guest',color:'orange'});await third.client.join('ABC123',{name:'Third',color:'red'});await f.settle();
+ assert.equal(host.client.connected(),true);assert.equal(guest.client.connected(),true);assert.equal(third.client.connected(),true);
+ const outgoing=[...f.network.peers.values()].filter(peer=>peer.localDescription.type==='offer');assert.equal(outgoing.length,2);
+ for(const peer of outgoing){assert.deepEqual(peer.offeredTracks,[video,audio]);assert.ok(peer.senders.every(sender=>sender.stream===stream));assert.deepEqual(peer.senders[0].parameters,{encodings:[{maxBitrate:2500000,maxFramerate:60}]});assert.equal(peer.senders[1].parameters,null,'video limits do not apply to audio');}
+ for(const member of [guest,third]){assert.equal(member.events.media.length,2);assert.ok(member.events.media.every(event=>event.from===host.id));assert.deepEqual(member.events.media.at(-1).stream.getTracks(),[video,audio]);assert.ok(member.events.media.every(event=>event.stream===member.events.media[0].stream),'audio and video reuse one receiver stream');}
+ assert.ok([...f.network.peers.values()].filter(peer=>peer.localDescription.type==='answer').every(peer=>peer.senders.length===0),'guests do not capture or send media');assert.equal(host.events.media.length,0);
+ assert.equal(guest.client.toHost({type:'input',mask:5}),true);assert.equal(host.client.broadcast({type:'stream-start',level:{world:3,area:0}}),true);await flush();assert.equal(host.events.data.at(-1).packet.mask,5);assert.equal(guest.events.data.at(-1).packet.type,'stream-start');assert.equal(host.events.errors.length+guest.events.errors.length+third.events.errors.length,0);
+ await host.client.leave();assert.equal(video.stops+audio.stops,0,'the media controller owns the source tracks; transport leave only closes peers');
+});
+test('stream negotiation fails clearly for absent or ended video and unsupported media sending',async t=>{
+ for(const source of [null,new FakeStream([mediaTrack('audio')]),new FakeStream([{kind:'video',readyState:'ended'}])]){
+  const f=fixture(t),host=f.member('host-player-00001',{getHostStream:()=>source}),guest=f.member('guest-player-0001');await host.client.create({name:'Host',color:'white',transport:'stream'});await guest.client.join('ABC123',{name:'Guest',color:'black'});await host.client.poll();
+  assert.equal(host.client.connected(),false);assert.match(host.events.errors.at(-1).message,/live game video track/i);assert.ok(!f.signals.some(signal=>signal.type==='offer'),'missing video never negotiates an apparently ready stream room');await guest.client.leave();await host.client.leave();
+ }
+ const f=fixture(t);class NoMediaPeer extends f.network.Peer{constructor(config){super(config);this.addTrack=undefined;}}
+ const host=f.member('host-player-00001',{Peer:NoMediaPeer,getHostStream:()=>new FakeStream([mediaTrack('video')])}),guest=f.member('guest-player-0001');await host.client.create({name:'Host',color:'white',transport:'stream'});await guest.client.join('ABC123',{name:'Guest',color:'black'});await host.client.poll();assert.match(host.events.errors.at(-1).message,/cannot send.*game stream/i);assert.equal(host.client.connected(),false);assert.ok(!f.signals.some(signal=>signal.type==='offer'));
+});
+test('streamless media aggregates without duplicates and late tracks from a departed peer cannot reach a fresh room',async t=>{
+ const f=fixture(t),video=mediaTrack('video'),audio=mediaTrack('audio'),host=f.member('host-player-00001',{getHostStream:()=>new FakeStream([video])}),guest=f.member('guest-player-0001');await host.client.create({name:'Host',color:'white',transport:'stream'});await guest.client.join('ABC123',{name:'Guest',color:'black'});await f.settle();
+ const oldPeer=[...f.network.peers.values()].find(peer=>peer.localDescription.type==='answer');oldPeer.ontrack({track:audio,streams:[]});oldPeer.ontrack({track:audio,streams:[]});assert.deepEqual(guest.events.media.at(-1).stream.getTracks(),[video,audio]);
+ const hostPeer=[...f.network.peers.values()].find(peer=>peer.localDescription.type==='offer');hostPeer.ontrack({track:video,streams:[]});assert.equal(host.events.media.length,0,'only host media is accepted by a guest');
+ await guest.client.leave();await host.client.poll();await guest.client.join('ABC123',{name:'Returned',color:'orange'});await f.settle();const media=guest.events.media.length,errors=guest.events.errors.length;oldPeer.ontrack({track:mediaTrack('video'),streams:[]});oldPeer.ontrack({track:audio,streams:[{}]});await flush();assert.equal(guest.events.media.length,media);assert.equal(guest.events.errors.length,errors);assert.equal(guest.client.connected(),true);
+});
+test('an in-flight media offer or answer cannot signal with a newer room token after leaving',async t=>{
+ for(const phase of ['offer','answer']){
+  const f=fixture(t),hold=deferred();let held=false;class SlowPeer extends f.network.Peer{
+   async createOffer(){const value=await super.createOffer();if(phase==='offer'&&!held){held=true;await hold.promise;}return value;}
+   async createAnswer(){const value=await super.createAnswer();if(phase==='answer'&&!held){held=true;await hold.promise;}return value;}
+  }
+  const host=f.member('host-player-00001',{Peer:phase==='offer'?SlowPeer:f.network.Peer,getHostStream:()=>new FakeStream([mediaTrack('video')])}),guest=f.member('guest-player-0001',{Peer:phase==='answer'?SlowPeer:f.network.Peer});await host.client.create({name:'Host',color:'white',transport:'stream'});await guest.client.join('ABC123',{name:'Guest',color:'black'});
+  let pending;if(phase==='offer')pending=host.client.poll();else{await host.client.poll();pending=guest.client.poll();}await flush();assert.equal(held,true);
+  await host.client.leave();await host.client.create({name:'New host',color:'orange',transport:'stream'});await guest.client.join('ABC123',{name:'Returned',color:'black'});await f.settle();assert.equal(host.client.connected(),true);const count=f.calls.length,media=guest.events.media.length;hold.resolve();await pending;await flush();assert.equal(f.calls.length,count,'stale negotiation never sends an SDP signal into the fresh room');assert.equal(guest.events.media.length,media);assert.equal(host.client.connected(),true);assert.equal(guest.client.connected(),true);
+ }
+});
+test('synchronized rooms do not capture media and optional encoder settings cannot break a stream connection',async t=>{
+ const f=fixture(t),host=f.member('host-player-00001',{getHostStream(){throw new Error('sync must not capture media');}}),guest=f.member('guest-player-0001');await host.client.create({name:'Host',color:'white'});await guest.client.join('ABC123',{name:'Guest',color:'black'});await f.settle();assert.equal(host.client.connected(),true);assert.ok([...f.network.peers.values()].every(peer=>peer.senders.length===0));const guestPeer=[...f.network.peers.values()].find(peer=>peer.localDescription.type==='answer');guestPeer.ontrack({track:mediaTrack('video'),streams:[]});assert.equal(guest.events.media.length,0);
+ await guest.client.leave();await host.client.leave();const video=mediaTrack('video'),streamHost=f.member('stream-host-00001',{getHostStream:()=>new FakeStream([video])}),streamGuest=f.member('stream-guest-0001');await streamHost.client.create({name:'Host',color:'white',transport:'stream'});await streamGuest.client.join('ABC123',{name:'Guest',color:'black'});await streamHost.client.poll();const outgoing=[...f.network.peers.values()].find(peer=>peer.senders.length);outgoing.senders[0].setParameters=async()=>{throw new Error('encoder settings unsupported');};await f.settle();assert.equal(streamHost.client.connected(),true);assert.equal(streamGuest.client.connected(),true);assert.equal(streamHost.events.errors.length,0);assert.equal(streamGuest.events.errors.length,0);
 });
 test('connection diagnostics use selected candidate pairs and report the slowest live host connection',async t=>{
  const f=fixture(t),{host,guest}=await f.pair(),third=f.member('third-player-0001');await third.client.join('ABC123',{name:'Third',color:'red'});await f.settle();

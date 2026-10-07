@@ -8,7 +8,7 @@ import {createLobbyHandler} from '../../server/lobby.js';
 const root=new URL('../../',import.meta.url),html=fs.readFileSync(new URL('dist/index.html',root),'utf8');
 const bytes=fs.readFileSync(process.env.BOMBERMAN_TEST_ROM),flush=()=>new Promise(resolve=>setImmediate(resolve));
 const scenario=process.env.BOMBERMAN_ONLINE_APP_SCENARIO??'';
-assert.ok(['','audio-hang','pause-delay','ack-timeout','guest-lag','player-departure','online-gameover'].includes(scenario),'known online app scenario');
+assert.ok(['','audio-hang','pause-delay','ack-timeout','guest-lag','player-departure','online-gameover','host-stream'].includes(scenario),'known online app scenario');
 const same=(a,b)=>assert.deepEqual(JSON.parse(JSON.stringify(a)),JSON.parse(JSON.stringify(b)));
 function colorButton(app,color,group='room-color-options'){
  const buttons=app.e.get(group).children;assert.equal(buttons.length,8,`${group} offers all eight colors`);
@@ -22,7 +22,7 @@ function assertColorUI(app,color,{disabled=false}={}){
  }
 }
 class D1SQLite{
- constructor(){this.sqlite=new DatabaseSync(':memory:');this.sqlite.exec('PRAGMA foreign_keys=ON');this.sqlite.exec(fs.readFileSync(new URL('drizzle/0000_lobbies.sql',root),'utf8'));}
+ constructor(){this.sqlite=new DatabaseSync(':memory:');this.sqlite.exec('PRAGMA foreign_keys=ON');const journal=JSON.parse(fs.readFileSync(new URL('drizzle/meta/_journal.json',root),'utf8'));for(const entry of journal.entries)this.sqlite.exec(fs.readFileSync(new URL(`drizzle/${entry.tag}.sql`,root),'utf8'));}
  withSession(){return this;}
  prepare(sql){const db=this;return {bind(...values){return {sql,values,async first(){return db.sqlite.prepare(sql).get(...values)??null;},async all(){return {results:db.sqlite.prepare(sql).all(...values)};},async run(){const r=db.sqlite.prepare(sql).run(...values);return {meta:{changes:Number(r.changes),last_row_id:Number(r.lastInsertRowid)}};}};}};}
  async batch(statements){this.sqlite.exec('BEGIN IMMEDIATE');try{const result=statements.map(s=>{const r=this.sqlite.prepare(s.sql).run(...s.values);return {meta:{changes:Number(r.changes),last_row_id:Number(r.lastInsertRowid)}};});this.sqlite.exec('COMMIT');return result;}catch(error){this.sqlite.exec('ROLLBACK');throw error;}}
@@ -31,40 +31,55 @@ const db=new D1SQLite(),handler=createLobbyHandler();const requests=[];
 async function fetchLobby(path,options){requests.push({path,method:options.method,body:options.body});return handler(new Request(new URL(path,'https://game.test/'),options),{DB:db});}
 const peers=new Map(),channels=[];let peerSerial=0,delayPauseRequest=false,droppedLoaded=0;
 const pendingPauseRequests=[];
+let trackSerial=0;
+class MediaTrack extends EventTarget{
+ constructor(kind){super();this.kind=kind;this.id=`${kind}-${++trackSerial}`;this.readyState='live';this.enabled=true;this.contentHint='';}
+ stop(){this.readyState='ended';}
+}
+class MediaStream{
+ constructor(tracks=[]){this.tracks=[...tracks];}
+ getTracks(){return [...this.tracks];}
+ getVideoTracks(){return this.tracks.filter(track=>track.kind==='video');}
+ getAudioTracks(){return this.tracks.filter(track=>track.kind==='audio');}
+ addTrack(track){if(!this.tracks.includes(track))this.tracks.push(track);}
+}
 class Channel extends EventTarget{
  constructor(label){super();this.label=label;this.readyState='connecting';this.bufferedAmount=0;this.sent=[];channels.push(this);}
  send(data){assert.equal(this.readyState,'open');this.sent.push(data);this.bufferedAmount+=Buffer.byteLength(data);const packet=JSON.parse(data);if(scenario==='ack-timeout'&&packet.type==='loaded'){droppedLoaded++;this.bufferedAmount=0;return;}const deliver=()=>{if(this.remote.readyState==='open')this.remote.onmessage?.({data});this.bufferedAmount=0;this.dispatchEvent(new Event('bufferedamountlow'));};if(delayPauseRequest&&packet.type==='pause-request')pendingPauseRequests.push(deliver);else queueMicrotask(deliver);}
  close(){if(this.readyState==='closed')return;this.readyState='closed';this.onclose?.();this.remote?.close();}
 }
 class Peer{
- constructor(){this.id='peer-'+(++peerSerial);this.connectionState='new';this.localDescription=null;this.remoteDescription=null;this.candidates=[];peers.set(this.id,this);}
+ constructor(){this.id='peer-'+(++peerSerial);this.connectionState='new';this.localDescription=null;this.remoteDescription=null;this.candidates=[];this.senders=[];peers.set(this.id,this);}
+ addTrack(track,stream){const sender={track,stream,parameters:{encodings:[{}]},getParameters(){return structuredClone(this.parameters);},async setParameters(value){this.parameters=structuredClone(value);}};this.senders.push(sender);return sender;}
  createDataChannel(label,options){assert.equal(options.ordered,true);return this.channel=new Channel(label);}
  async createOffer(){return {type:'offer',sdp:this.id};}
  async createAnswer(){return {type:'answer',sdp:this.id};}
  async setLocalDescription(description){this.localDescription=description;queueMicrotask(()=>this.connectionState!=='closed'&&this.onicecandidate?.({candidate:{candidate:'ice:'+this.id,toJSON(){return {candidate:this.candidate};}}}));this.connect();}
  async setRemoteDescription(description){assert.ok(peers.has(description.sdp));this.remoteDescription=description;this.connect();}
  async addIceCandidate(candidate){this.candidates.push(candidate);this.connect();}
- connect(){const other=peers.get(this.remoteDescription?.sdp);if(!other||!this.localDescription||!other.localDescription||!this.candidates.length||!other.candidates.length)return;const host=this.channel?this:other,guest=host===this?other:this;if(host.channel.remote)return;const channel=new Channel(host.channel.label);host.channel.remote=channel;channel.remote=host.channel;guest.channel=channel;guest.ondatachannel?.({channel});for(const p of [host,guest])p.connectionState='connected';for(const c of [host.channel,channel]){c.readyState='open';queueMicrotask(()=>c.onopen?.());}}
+ connect(){const other=peers.get(this.remoteDescription?.sdp);if(!other||!this.localDescription||!other.localDescription||!this.candidates.length||!other.candidates.length)return;const host=this.channel?this:other,guest=host===this?other:this;if(host.channel.remote)return;const channel=new Channel(host.channel.label);host.channel.remote=channel;channel.remote=host.channel;guest.channel=channel;guest.ondatachannel?.({channel});for(const p of [host,guest])p.connectionState='connected';for(const sender of host.senders)queueMicrotask(()=>guest.connectionState!=='closed'&&guest.ontrack?.({track:sender.track,streams:[sender.stream]}));for(const c of [host.channel,channel]){c.readyState='open';queueMicrotask(()=>c.onopen?.());}}
  close(){this.connectionState='closed';this.channel?.close();}
 }
-async function app(name,id,color,gameMode='campaign',players=2){
+async function app(name,id,color,gameMode='campaign',players=2,{rom=true}={}){
  const elements=new Map(),timers=new Map(),modules=new Map();let timerID=0,nextFrame,clock=1000,machine,exported,draws=0;
  const document={getElementById:id=>elements.get(id),activeElement:null,hidden:false,addEventListener(){},createElement:element};
- function element(){return {value:'',textContent:'',disabled:true,hidden:false,open:false,listeners:{},children:[],style:{},attributes:{},dataset:{},width:684,height:262,addEventListener(type,fn){this.listeners[type]=fn;},setAttribute(key,value){this.attributes[key]=value;},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];this.textContent='';},focus(){document.activeElement=this;},click(){return this.listeners.click?.();},showModal(){this.open=true;},close(){this.open=false;},getContext(){return {createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),putImageData(){draws++;}};}};}
- for(const [,id]of html.matchAll(/id="([^"]+)"/g))elements.set(id,element());
+ function element(){return {value:'',textContent:'',disabled:false,hidden:false,open:false,listeners:{},children:[],style:{},attributes:{},dataset:{},width:684,height:262,srcObject:null,playCalls:0,pauseCalls:0,captures:[],addEventListener(type,fn){this.listeners[type]=fn;},setAttribute(key,value){this.attributes[key]=value;},append(...children){this.children.push(...children);},replaceChildren(){this.children=[];this.textContent='';},focus(){document.activeElement=this;},click(){return this.listeners.click?.();},showModal(){this.open=true;},close(){this.open=false;},async play(){this.playCalls++;},pause(){this.pauseCalls++;},captureStream(fps){const value=new MediaStream([new MediaTrack('video')]);this.captures.push({fps,stream:value});return value;},getContext(){return {createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),putImageData(){draws++;}};}};}
+ for(const [tag,id]of html.matchAll(/<[^>]+\bid="([^"]+)"[^>]*>/g)){const node=element();node.disabled=/\bdisabled(?:\s|=|>)/.test(tag);node.hidden=/\bhidden(?:\s|=|>)/.test(tag);elements.set(id,node);}
  elements.get('color-select').value=color;elements.get('player-count-select').value='2';elements.get('room-name').value=name;
+ if(elements.has('room-transport'))elements.get('room-transport').value='sync';
  const window={listeners:{},addEventListener(type,fn){this.listeners[type]=fn;}};
  class AudioContext{
   constructor(){this.sampleRate=name==='Guest'?48000:44100;this.state='suspended';this.destination={};this.suspendCalls=0;this.unsettledCalls=0;}
-  createScriptProcessor(){return {connect(){}};}
-  createGain(){return {gain:{value:1},connect(){}};}
+  createScriptProcessor(){return {connect(){},disconnect(){}};}
+  createGain(){return {gain:{value:1},connect(){},disconnect(){}};}
+  createMediaStreamDestination(){return {stream:new MediaStream([new MediaTrack('audio')])};}
   suspend(){this.state='suspended';this.suspendCalls++;if((name==='Tkeyro'&&this.suspendCalls===3)||(name==='Guest'&&this.suspendCalls===2)){this.unsettledCalls++;return new Promise(()=>{});}return Promise.resolve();}
   resume(){this.state='running';return Promise.resolve();}
  }
- if(scenario==='audio-hang')window.AudioContext=AudioContext;
+ const audioEnabled=['audio-hang','host-stream'].includes(scenario);if(audioEnabled)window.AudioContext=AudioContext;
  class LocalURL extends URL{static createObjectURL(blob){exported=blob;return 'blob:test';}static revokeObjectURL(){}}
  const storage=new Map([['bomberman-player-id',id]]);
- const context=vm.createContext({console,document,window,...(scenario==='audio-hang'?{AudioContext}:{}),Blob,Response,Request,Headers,CompressionStream,DecompressionStream,TextEncoder,TextDecoder,structuredClone,crypto:webcrypto,fetch:fetchLobby,RTCPeerConnection:Peer,URL:LocalURL,location:{href:'https://game.test/'},navigator:{},Event,EventTarget,atob,btoa,queueMicrotask,indexedDB:undefined,performance:{now:()=>clock},localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},requestAnimationFrame:fn=>{nextFrame=fn;},setTimeout:(fn,ms)=>{const id=++timerID;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)});
+ const context=vm.createContext({console,document,window,...(audioEnabled?{AudioContext}:{}),MediaStream,Blob,Response,Request,Headers,CompressionStream,DecompressionStream,TextEncoder,TextDecoder,structuredClone,crypto:webcrypto,fetch:fetchLobby,RTCPeerConnection:Peer,URL:LocalURL,location:{href:'https://game.test/'},navigator:{},Event,EventTarget,atob,btoa,queueMicrotask,indexedDB:undefined,performance:{now:()=>clock},localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},requestAnimationFrame:fn=>{nextFrame=fn;},setTimeout:(fn,ms)=>{const id=++timerID;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id)});
  async function module(url){const key=url.href;if(modules.has(key))return modules.get(key);const result=new vm.SourceTextModule(fs.readFileSync(url,'utf8'),{context,identifier:key,initializeImportMeta:meta=>{meta.url=key;}});modules.set(key,result);return result;}
  async function load(path){const result=await module(new URL(path,root));if(result.status==='unlinked')await result.link((specifier,parent)=>module(new URL(specifier,parent.identifier)));if(result.status==='linked')await result.evaluate();return result.namespace;}
  const vendor=await load('dist/vendor/pce.js'),setCanvas=vendor.PCE.prototype.SetCanvas;vendor.PCE.prototype.SetCanvas=function(id){machine=this;return setCanvas.call(this,id);};
@@ -81,13 +96,15 @@ async function app(name,id,color,gameMode='campaign',players=2){
  assert.equal(colorButton(result,'original','color-options').disabled,false);
  await colorButton(result,'original','color-options').click();assertColorUI(result,'original');
  await colorButton(result,color,'color-options').click();assertColorUI(result,color);
+ if(!rom){assert.equal(machine,undefined,'a stream guest has not constructed an emulator');await elements.get('join-online-btn').click();assert.equal(elements.get('online-room-dialog').open,true,result.status());return result;}
  await elements.get('rom-input').listeners.change({target:{files:[{size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength)}]}});assert.match(elements.get('load-status').textContent,/verified/,result.status());
  assertColorUI(result,color);
  for(let i=0;i<110;i++)result.tick();
  await result.key('ArrowDown');await result.key('ArrowDown');if(gameMode==='battle')await result.key('ArrowDown');if(players!==2){elements.get('player-count-select').value=String(players);elements.get('player-count-select').listeners.change({target:{value:String(players)}});}await result.key('Enter');await result.key('ArrowDown');await result.key('Enter');assert.equal(elements.get('online-room-dialog').open,true,result.status());
  return result;
 }
-const host=await app('Tkeyro','host-player-00001','black','campaign',scenario==='player-departure'?3:2),guest=await app('Guest','guest-player-0001','orange');let third;
+const host=await app('Tkeyro','host-player-00001','black','campaign',scenario==='player-departure'?3:2),guest=await app('Guest','guest-player-0001','orange','campaign',2,{rom:scenario!=='host-stream'});let third;
+if(scenario==='host-stream'){host.e.get('room-transport').value='stream';await host.e.get('room-transport').listeners.change?.({target:{value:'stream'}});}
 async function negotiate(){for(let i=0;i<12;i++){await host.poll();await guest.poll();if(third)await third.poll();if(!host.e.get('room-start').disabled)return;}assert.fail(host.status()+' / '+guest.status());}
 async function join(){await host.e.get('create-room').click();const code=host.e.get('room-code').value;assert.match(code,/^[A-Z2-9]{10}$/);guest.e.get('room-code').value=code;await guest.e.get('join-room').click();await guest.e.get('room-ready').click();await negotiate();assert.equal(host.e.get('room-list').children.length,2);assert.equal(guest.e.get('room-list').children.length,2);assert.match(host.e.get('room-list').children[1].children[0].title,/orange/);return code;}
 async function synchronize(){await host.e.get('room-start').click();for(let n=0;n<700;n++){host.tick();await flush();if(host.e.get('pause-btn').textContent==='Resume')await new Promise(resolve=>setTimeout(resolve,5));if(guest.e.get('online-room-dialog').open===false&&guest.e.get('pause-btn').textContent==='Pause')return;}assert.fail(host.status()+' / '+guest.status()+JSON.stringify({frame:host.e.get('frame-count').textContent,campaign:host.machine._onlineCampaign.state,stage:host.machine.RAM.slice(0x84a,0x84c),packets:channels.map(c=>c.sent.slice(-3).map(s=>JSON.parse(s).type))}));}
@@ -116,7 +133,56 @@ if(scenario==='ack-timeout'){
  process.stdout.write(JSON.stringify({scenario,startupTimeout:true,blockedResume:true,droppedLoaded}));
 }else{
 await synchronize();await advance(5);assertColorUI(host,'black',{disabled:true});assertColorUI(guest,'orange',{disabled:true});
-if(scenario==='player-departure'){
+if(scenario==='host-stream'){
+ const video=guest.e.get('stream-video'),canvas=host.e.get('game-canvas'),campaign=await host.load('dist/campaign.js');
+ assert.equal(guest.machine,undefined,'a joined stream guest never constructs PCE or loads the ROM');assert.equal(guest.draws,0,'a guest does not draw emulated frames');
+ assert.equal(video.hidden,false);assert.equal(guest.e.get('game-canvas').hidden,true);assert.ok(video.srcObject);assert.ok(video.playCalls>0,'received media is offered to video playback');
+ assert.equal(video.srcObject.getVideoTracks().length,1);assert.equal(video.srcObject.getAudioTracks().length,1,'the emulator audio branch arrives with video');
+ assert.equal(video.muted,true,'initial autoplay remains muted until the guest gestures');await video.click();await flush();assert.equal(video.muted,false,'clicking the video unlocks stream audio');
+ await guest.e.get('mute-btn').click();assert.equal(video.muted,true);await guest.e.get('mute-btn').click();assert.equal(video.muted,false,'a guest can mute and unmute without a native machine');
+ await guest.e.get('player-count-select').listeners.change({target:{value:'3'}});assert.equal(guest.machine,undefined,'the inactive native count picker is safe in a no-ROM guest');
+ assert.ok(canvas.captures.some(c=>c.fps===60));assert.ok([...peers.values()].some(p=>p.senders.some(s=>s.track.kind==='video'&&s.parameters.encodings[0].maxBitrate===2500000)),'transport applies its optional video rate limit');
+ for(const id of ['save-btn','export-save-btn','admin-btn'])assert.equal(guest.e.get(id).disabled,true,`${id} belongs to the emulator host`);
+ for(const a of [host,guest]){await a.e.get('join-online-btn').click();assert.equal(a.e.get('online-room-dialog').open,false,'Join cannot replace a playing session with the lobby phase');assert.equal(a.e.get('pause-btn').textContent,'Pause');}
+ const actors=new Map(),control=host.machine._onlineCampaign.control;
+ host.machine._onlineCampaign.control=function(actor){actors.set(actor.id,actor);return control(actor);};await advance(1);assert.equal(actors.size,2);
+ host.machine.RAM.fill(0,0xd98,0xdb8);host.machine.RAM.fill(0,0xf9b,0xfb4);host.machine._levelObjective.state.enabled=false;host.machine.RAM[0x434]=31;host.machine.RAM[0x435]=21;
+ for(let y=1;y<21;y++)for(let x=2;x<31;x++)host.machine.RAM[0x44a+y*32+x]=0xca;
+ const before=actors.get(2).x;await guest.key('ArrowRight');
+ for(let n=0;n<12;n++){host.tick();await flush();}
+ await guest.key('ArrowRight',true);assert.ok(actors.get(2).x>before+15,'streamed guest controls move only the host actor');
+ const remote=actors.get(2);remote.x=Math.floor(remote.x/16)*16+8;remote.y=Math.floor(remote.y/16)*16+8;
+ campaign.spawnItem(host.machine,1,Math.floor(remote.x/16),Math.floor(remote.y/16));await advance(2);assert.equal(host.machine._sharedPowerups.state.counts[1],1,'streamed teams still share upgrades');
+ const bombs=remote.bombsPlaced;await guest.key('Space');await advance(1);await guest.key('Space',true);assert.equal(remote.bombsPlaced,bombs+1,'streamed guest bomb input reaches the authoritative emulator');assert.ok(campaign.bombs(host.machine).length>0);
+ host.machine.RAM.fill(0,0x84f,0x877);const frame=host.machine._onlineCampaign.state.frame;
+ for(let n=0;n<50;n++){host.tick();await flush();}
+ assert.ok(host.machine._onlineCampaign.state.frame-frame>100,'host streaming advances without guest simulation acknowledgements or callbacks');
+ assert.equal(guest.machine,undefined);assert.equal(guest.draws,0);
+ const packets=channels.flatMap(c=>c.sent.map(s=>JSON.parse(s)));
+ assert.ok(packets.some(p=>p.type==='stream-start'));assert.ok(packets.some(p=>p.type==='loaded'));
+ assert.equal(packets.some(p=>['snapshot','frames','progress'].includes(p.type)||p.type.startsWith('transfer-')),false,'guests receive media and controls rather than ROM state or authority frames');
+ // Streamed guests must stay in the same room across an intentional Continue,
+ // and be released cleanly by Quit despite having no native ending to replay.
+ host.machine.RAM[0x84a]=2;host.machine.RAM[0x84b]=5;await advance(1);
+ async function defeatStreamTeam(){
+  host.machine.RAM[0x438]=0;host.machine.RAM.fill(0,0xd98,0xdb8);host.machine.RAM.fill(0,0x84f,0x877);host.machine.RAM.fill(0,0xf9b,0xfb4);host.machine._levelObjective.state.enabled=false;
+  for(const actor of actors.values())Object.assign(actor,{alive:false,deathFrame:0,extraLives:0,target:null,route:[],goal:null});
+  for(let n=0;n<300&&![host,guest].every(a=>/Continue restarts/.test(a.e.get('online-health').textContent));n++)await advance(1);
+  for(const a of [host,guest])assert.match(a.e.get('online-health').textContent,/Continue restarts/);
+ }
+ await defeatStreamTeam();assert.match(guest.e.get('menu-status').textContent,/Waiting for the host/);assert.match(host.status(),/3-0/);const code=host.e.get('room-code').value;
+ await host.key('Enter');for(let n=0;n<700;n++){
+  host.tick();await flush();guest.tick();await flush();
+  if(host.e.get('pause-btn').textContent==='Pause'&&guest.e.get('pause-btn').textContent==='Pause'&&host.machine.RAM[0x84a]===2&&host.machine.RAM[0x84b]===0&&actors.get(1).alive&&actors.get(2).alive)break;
+  if(n===699)assert.fail('Stream Continue did not restart world 3: '+host.status()+' / '+guest.status());
+ }
+ assert.equal(host.machine.RAM[0x438],2);assert.equal(host.e.get('room-code').value,code);assert.equal(guest.machine,undefined);assert.equal(video.srcObject.getVideoTracks()[0].readyState,'live');
+ const continued=await host.export();assert.deepEqual(Array.from(continued.session.onlineRoom.players,p=>p.color),['black','orange']);assert.equal(continued.session.sharedPowerups.counts[1],0,'intentional Continue resets the defeated campaign upgrades');assert.ok(continued.session.companions.bots.every(b=>b.bombCapacity===1));
+ await defeatStreamTeam();await host.key('ArrowDown');await host.key('Enter');await flush();for(let n=0;n<130&&host.e.get('start-btn').disabled;n++)await advance(1);
+ assert.equal(host.e.get('start-btn').disabled,false);assert.match(host.e.get('menu-status').textContent,/1P - CAMPAIGN/);assert.equal(video.srcObject,null);assert.equal(video.hidden,true);assert.ok(channels.every(c=>c.readyState==='closed'));
+ assert.equal(guest.machine,undefined);assert.equal(guest.e.get('join-online-btn').disabled,false);await guest.e.get('join-online-btn').click();assert.equal(guest.e.get('online-room-dialog').open,true,'a guest without a ROM can join another room after Quit');
+ db.sqlite.close();process.stdout.write(JSON.stringify({scenario,noGuestEmulator:true,videoAudio:true,remoteControls:true,noSimulationBackpressure:true,worldContinue:true,cleanQuit:true}));
+}else if(scenario==='player-departure'){
  // Losing a third player must invalidate the original three-person game even
  // if the two remaining peers are still connected and the server removes them.
  await third.e.get('room-leave').click();await flush();await host.poll();await guest.poll();
@@ -138,6 +204,10 @@ if(scenario==='player-departure'){
   a.machine._onlineCampaign.control=function(actor){found.set(actor.id,actor);return control(actor);};
   actors.set(a,found);
  }
+ await advance(1);
+ // Finish a later stage in world 3, so Continue must rewind the world rather
+ // than accidentally booting the title's default world or the defeated area.
+ for(const a of [host,guest]){a.machine.RAM[0x84a]=2;a.machine.RAM[0x84b]=5;}
  await advance(1);
  for(const a of [host,guest]){
   assert.equal(actors.get(a).size,2);a.machine.RAM[0x438]=0;
@@ -172,7 +242,7 @@ if(scenario==='player-departure'){
   Object.assign(actors.get(a).get(2),{alive:false,deathFrame:0,extraLives:0,target:null,route:[],goal:null});
  }
  let elapsed=0,pausedEndingRecovery=false;
- for(;elapsed<300&&![host,guest].every(a=>a.e.get('start-btn').textContent==='Select');elapsed++){
+ for(;elapsed<300&&![host,guest].every(a=>/Continue restarts/.test(a.e.get('online-health').textContent));elapsed++){
   host.tick();await flush();
   if(events.get(host).terminal&&!events.get(guest).terminal&&!pausedEndingRecovery){
    // Pause after the host has stopped at the native ending, while its final
@@ -189,26 +259,55 @@ if(scenario==='player-departure'){
   guest.tick();await flush();assert.doesNotMatch(host.status()+guest.status(),/Emulation stopped|states differ|frame order|desynchronization|disconnected/);
  }
  assert.equal(pausedEndingRecovery,true,'the guest paused and resumed across the terminal authority frame');
- assert.ok(elapsed>=40&&elapsed<300,'both apps wait for native death music and fade before returning to their menus');
+ assert.ok(elapsed>=40&&elapsed<300,'both apps wait for native death music and fade before displaying Continue');
  for(const a of [host,guest]){
   const event=events.get(a);assert.equal(event.inventedLife,false,'game over cannot manufacture a spare life');
   assert.ok(event.terminal,'the unchanged ROM reached its native title');assert.equal(event.terminal.ram[0x438],255);
   assert.ok(event.music.includes(0x2a),'native death music plays');assert.ok(event.music.includes(0x2b),'native title music follows');assert.ok(event.black>0,'the native fade reaches black');
   assert.equal(event.banners,0,'zero lives cannot restart with a stage card');
   for(const actor of actors.get(a).values()){assert.equal(actor.alive,false);assert.equal(actor.deathFrame,DEATH_FRAMES);assert.equal(actor.extraLives,0);}
-  assert.equal(a.machine._onlineCampaign.state.enabled,false);assert.equal(a.e.get('online-room-dialog').open,false);assert.equal(a.e.get('start-btn').disabled,false);
-  assert.match(a.e.get('menu-status').textContent,/1P - CAMPAIGN/);assert.match(a.status(),/Game over/);
+  assert.equal(a.e.get('online-room-dialog').open,false);assert.equal(a.e.get('start-btn').disabled,true);
+  assert.match(a.e.get('online-health').textContent,/The host chooses Continue or Quit/);assert.match(a.status(),/Game over|Continue/);
  }
  same(events.get(host).terminal,events.get(guest).terminal);
- assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='game-over-ready')),'guests acknowledge the terminal authority frame before room closure');
- assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='game-over')),'host releases all peers to the main menu together');
+ assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='game-over-ready')),'guests acknowledge the terminal authority frame before Continue is offered');
+ const code=host.e.get('room-code').value,ids=[host.id,guest.id];
+ // The guest cannot choose for the host. Selecting Continue preserves the RTC
+ // room and the identities/colors, while fresh boot restores ordinary lives.
+ await guest.key('ArrowDown');await guest.key('Enter');await advance(1);
+ assert.match(host.e.get('online-health').textContent,/Continue restarts/,'guest input cannot select Quit for the team');
+ await host.key('Enter');
+ for(let n=0;n<700;n++){
+  host.tick();await flush();guest.tick();await flush();
+  if(host.e.get('pause-btn').textContent==='Resume')await new Promise(resolve=>setTimeout(resolve,5));
+  if(host.e.get('pause-btn').textContent==='Pause'&&guest.e.get('pause-btn').textContent==='Pause'&&host.machine._onlineCampaign.state.enabled&&host.machine.RAM[0x84a]===2&&host.machine.RAM[0x84b]===0&&actors.get(host).get(1)?.alive&&actors.get(host).get(2)?.alive)break;
+  if(n===699)assert.fail('Continue did not restart world 3: '+host.status()+' / '+guest.status());
+ }
+ await advance(3);same(host.machine.RAM,guest.machine.RAM);
+ for(const a of [host,guest]){assert.equal(a.e.get('room-code').value,code);assert.equal(a.machine.RAM[0x84a],2);assert.equal(a.machine.RAM[0x84b],0);assert.equal(a.machine.RAM[0x438],2);assert.equal(a.e.get('pause-btn').disabled,false,'Continue re-enables Pause for both peers');}
+ const continued=await host.export();assert.deepEqual(Array.from(continued.session.onlineRoom.players,p=>p.id),ids);assert.deepEqual(Array.from(continued.session.onlineRoom.players,p=>p.color),['black','orange']);
+ assert.equal(channels.some(c=>c.readyState!=='open'),false,'Continue does not replace or close the direct connection');
+ // The other requested example is 1-3 -> 1-0. A second zero-life defeat must
+ // offer a choice again rather than manufacturing a life or looping forever.
+ for(const a of [host,guest]){a.machine.RAM[0x84a]=0;a.machine.RAM[0x84b]=2;}
+ await advance(1);
+ for(const a of [host,guest]){
+  a.machine.RAM[0x438]=0;a.machine.RAM.fill(0,0xd98,0xdb8);a.machine.RAM.fill(0,0x84f,0x877);a.machine.RAM.fill(0,0xf9b,0xfb4);a.machine._levelObjective.state.enabled=false;
+  Object.assign(events.get(a),{music:[],banners:0,black:0,inventedLife:false,terminal:null});
+  for(const actor of actors.get(a).values())Object.assign(actor,{alive:false,deathFrame:0,extraLives:0,target:null,route:[],goal:null});
+ }
+ for(let n=0;n<300&&![host,guest].every(a=>/Continue restarts/.test(a.e.get('online-health').textContent));n++)await advance(1);
+ for(const a of [host,guest]){assert.match(a.e.get('online-health').textContent,/Continue restarts/);assert.equal(events.get(a).inventedLife,false);assert.ok(events.get(a).terminal);assert.match(a.status(),/1-0/);}
+ await host.key('ArrowDown');await host.key('Enter');await flush();
+ for(let n=0;n<130&&![host,guest].every(a=>a.e.get('start-btn').textContent==='Select'&&!a.e.get('start-btn').disabled);n++)await advance(1);
+ for(const a of [host,guest]){assert.equal(a.e.get('start-btn').textContent,'Select');assert.equal(a.e.get('start-btn').disabled,false);assert.match(a.e.get('menu-status').textContent,/1P - CAMPAIGN/);}
  for(const a of [host,guest]){await a.key('ArrowDown');assert.match(a.e.get('menu-status').textContent,/1P - DLC/);}
  await advance(35);for(const a of [host,guest]){
   assert.equal(a.machine._onlineCampaign.state.enabled,false,'later title frames never resume the defeated team');
   assert.equal(a.e.get('room-leave').disabled,true,'the completed lobby is closed');
   assert.equal(a.e.get('create-room').disabled,false,'either player can create a fresh lobby after game over');
  }
- db.sqlite.close();process.stdout.write(JSON.stringify({scenario,survivorContinues:true,finiteLives:true,nativeSequence:true,synchronizedEnd:true,usableMenus:true,pausedEndingRecovery}));
+ db.sqlite.close();process.stdout.write(JSON.stringify({scenario,survivorContinues:true,finiteLives:true,nativeSequence:true,synchronizedEnd:true,worldContinue:true,repeatedPrompt:true,usableMenus:true,pausedEndingRecovery}));
 }else if(scenario==='guest-lag'){
  // Stall the guest's rendering/simulation while its reliable transport stays
  // connected. The host must bound its lead rather than fill a ten-second queue.
@@ -242,8 +341,8 @@ if(scenario==='player-departure'){
  const normalDraws=guest.draws;host.tick();await flush();guest.tick();await flush();assert.ok(guest.draws>normalDraws,'the next ordinary frame draws after catch-up');
  assert.ok(host.machine._onlineCampaign.state.frame>=120,'checksummed gameplay continues after the lag');
  assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='progress')),'guest reports processed frame progress');
- await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
- process.stdout.write(JSON.stringify({scenario,frames:host.machine._onlineCampaign.state.frame,maxLead:lead,catchUp:true,timeBudget:true,coalescedRendering:true}));
+ const frames=host.machine._onlineCampaign.state.frame;await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
+ process.stdout.write(JSON.stringify({scenario,frames,maxLead:lead,catchUp:true,timeBudget:true,coalescedRendering:true}));
 }else if(scenario){
  let delayedFrames=0;
  if(scenario==='pause-delay'){
@@ -262,8 +361,8 @@ if(scenario==='player-departure'){
  same(host.machine.RAM,guest.machine.RAM);assert.equal(host.machine.PC,guest.machine.PC);
  if(scenario==='audio-hang')for(const a of [host,guest]){assert.equal(a.machine.WebAudioCtx.unsettledCalls,1,'an unresolved audio suspend request does not hold the gameplay handshake');assert.ok(a.machine.WebAudioCtx.suspendCalls>=2);}
  assert.ok(host.machine._onlineCampaign.state.frame>=120,'authoritative gameplay progresses past its first checksum');
- await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
- process.stdout.write(JSON.stringify({scenario,frames:host.machine._onlineCampaign.state.frame,delayedFrames,unsettledAudio:scenario==='audio-hang'}));
+ const frames=host.machine._onlineCampaign.state.frame;await host.e.get('room-leave').click();await guest.e.get('room-leave').click();db.sqlite.close();
+ process.stdout.write(JSON.stringify({scenario,frames,delayedFrames,unsettledAudio:scenario==='audio-hang'}));
 }else{
 assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='transfer-chunk')),'host serialized snapshot travels over chunked RTC');assert.ok(channels.some(c=>c.sent.some(s=>JSON.parse(s).type==='loaded')),'guest acknowledges applied snapshot');
 assert.equal(host.machine._onlineCampaign.state.enabled,true);assert.equal(guest.machine._onlineCampaign.state.enabled,true);same(host.machine.RAM,guest.machine.RAM);

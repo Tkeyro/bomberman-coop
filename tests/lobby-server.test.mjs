@@ -8,14 +8,15 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createLobbyHandler } from '../server/lobby.js';
 
-const schema = await readFile(new URL('../drizzle/0000_lobbies.sql', import.meta.url), 'utf8');
+const journal = JSON.parse(await readFile(new URL('../drizzle/meta/_journal.json', import.meta.url), 'utf8'));
+const migrations = await Promise.all(journal.entries.map(entry => readFile(new URL(`../drizzle/${entry.tag}.sql`, import.meta.url), 'utf8')));
 const revision = '0.3.8-test', romHash = 'a'.repeat(64);
 const identity = (id, extras = {}) => ({ playerId: `player_${String(id).padStart(12, '0')}`, name: `Player ${id}`, color: 'original', revision, romHash, ...extras });
 
 // Real SQLite executes production migration and query text; this adapter only
 // supplies D1's Promise/result envelope and atomic batch contract.
 class D1SQLite {
-  constructor() { this.sqlite = new DatabaseSync(':memory:'); this.sqlite.exec('PRAGMA foreign_keys = ON'); this.sqlite.exec(schema); }
+  constructor() { this.sqlite = new DatabaseSync(':memory:'); this.sqlite.exec('PRAGMA foreign_keys = ON'); for (const migration of migrations) this.sqlite.exec(migration); }
   withSession(constraint) { assert.equal(constraint, 'first-primary'); return this; }
   prepare(sql) {
     const db = this;
@@ -84,6 +85,49 @@ test('lobby membership uses unguessable tokens; roster exposes no secrets', asyn
   assert.equal((await f.api(`/${host.room.code}/start`, 'POST', undefined, guest.token)).status, 403);
   const other = await f.create({ playerId: identity(9).playerId });
   assert.equal((await f.api(`/${other.room.code}`, 'GET', undefined, host.token)).status, 403);
+});
+
+test('room transport is fixed by the host and exposed consistently for campaign and battle', async t => {
+  const f = fixture(t);
+  assert.equal((await f.create()).room.transport, 'sync');
+  for (const transport of ['unknown', '', null, 1, {}]) {
+    assert.equal((await f.api('', 'POST', { ...identity(0), mode: 'campaign', transport })).status, 400);
+  }
+  for (const mode of ['campaign', 'battle']) for (const transport of ['sync', 'stream']) {
+    const host = await f.create({ mode, transport });
+    const guest = await f.joinRoom(host, 1);
+    assert.equal(host.room.transport, transport);
+    assert.equal(guest.room.transport, transport);
+    assert.equal(guest.room.mode, mode);
+    assert.equal((await f.api(`/${host.room.code}/join`, 'POST', identity(2, { transport: 'sync' }))).status, 400);
+    assert.equal((await f.api(`/${host.room.code}/member`, 'PATCH', { transport: 'sync' }, guest.token)).status, 400);
+    for (const member of [host, guest]) {
+      const read = await f.api(`/${host.room.code}`, 'GET', undefined, member.token);
+      assert.equal(read.body.room.transport, transport);
+      const heartbeat = await f.api(`/${host.room.code}/heartbeat`, 'POST', undefined, member.token);
+      assert.equal(heartbeat.body.room.transport, transport);
+    }
+    const ready = await f.api(`/${host.room.code}/member`, 'PATCH', { ready: true }, guest.token);
+    assert.equal(ready.body.room.transport, transport);
+    const started = await f.api(`/${host.room.code}/start`, 'POST', undefined, host.token);
+    assert.equal(started.status, 200);
+    assert.equal(started.body.room.transport, transport);
+    assert.equal(f.db.sqlite.prepare('SELECT transport FROM bm_rooms WHERE code = ?').get(host.room.code).transport, transport);
+  }
+});
+
+test('transport migration keeps existing rooms synchronized and constrains stored values', t => {
+  const sqlite = new DatabaseSync(':memory:');
+  t.after(() => sqlite.close());
+  sqlite.exec(migrations[0]);
+  sqlite.prepare('INSERT INTO bm_rooms (code,host_member_id,mode,world,slots,patch_revision,rom_hash,status,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    .run('ABCDEFGH23', 'legacy-host', 'campaign', 2, 5, revision, romHash, 'lobby', 1, 2);
+  for (const migration of migrations.slice(1)) sqlite.exec(migration);
+  assert.equal(sqlite.prepare('SELECT transport FROM bm_rooms').get().transport, 'sync');
+  assert.throws(() => sqlite.exec("UPDATE bm_rooms SET transport = 'other'"), /CHECK constraint failed/);
+  assert.throws(() => sqlite.exec('UPDATE bm_rooms SET transport = NULL'), /NOT NULL constraint failed/);
+  sqlite.exec("UPDATE bm_rooms SET transport = 'stream'");
+  assert.equal(sqlite.prepare('SELECT transport FROM bm_rooms').get().transport, 'stream');
 });
 
 test('ROM/revision matching, names, colors, methods, origins and bounded JSON are enforced', async t => {
@@ -225,7 +269,8 @@ test('build preserves source assets and emits a standalone Worker with migration
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.equal(await readFile(join(directory, 'dist/index.html'), 'utf8'), html);
   assert.equal(JSON.parse(await readFile(join(directory, 'dist/.openai/hosting.json'), 'utf8')).project_id, 'same-existing-site');
-  assert.equal(JSON.parse(await readFile(join(directory, 'dist/.openai/drizzle/meta/_journal.json'), 'utf8')).entries[0].tag, '0000_lobbies');
+  assert.deepEqual(JSON.parse(await readFile(join(directory, 'dist/.openai/drizzle/meta/_journal.json'), 'utf8')), journal);
+  assert.equal(await readFile(join(directory, 'dist/.openai/drizzle/0001_room_transport.sql'), 'utf8'), migrations[1]);
   const worker = (await import(pathToFileURL(join(directory, 'dist/server/index.js')))).default;
   assert.equal(await (await worker.fetch(new Request('https://test/'), {}, {})).text(), html);
   assert.equal((await worker.fetch(new Request('https://test/vendor/LICENSE.txt'), {}, {})).headers.get('content-type'), 'text/plain; charset=utf-8');
